@@ -15,9 +15,43 @@ import trollius
 from trollius import From
 import trollius as asyncio
 
-def _get_manager():
-    yield From(pygazebo.connect(('localhost', 11345)))
+class GazeboAPI(object):
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
 
+class GazeboWorldStats(GazeboAPI):
+    TOPIC = '/gazebo/default/world_stats'
+    TYPE = 'gazebo.msgs.WorldStatistics'
+
+    def __init__(self, host, port):
+        super(GazeboWorldStats, self).__init__(host, port)
+
+    def get_sim_time(self, callback):
+        self.callback = callback
+        loop = trollius.get_event_loop()
+        loop.run_until_complete(self._world_stats_subscribe_loop())
+
+    def _world_stats_subscribe_loop(self):
+        #manager = yield From(self._manager()) 
+        manager = yield From(pygazebo.connect((self.host, self.port)))
+        subscriber = manager.subscribe(self.TOPIC, self.TYPE , self._world_stats_callback)
+        self.waiting = True 
+        while self.waiting:
+            yield From(subscriber.wait_for_connection())
+
+    def _world_stats_callback(self, data):
+        world_stats = pygazebo.msg.world_stats_pb2.WorldStatistics()
+        world_stats.ParseFromString(data)
+        #print "Time  ", world_stats.real_time
+        if self.waiting:
+            self.callback(world_stats.sim_time)
+        self.waiting = False
+
+
+    def get_world_stats_once(self, callback):
+        loop = trollius.get_event_loop()
+        loop.run_until_complete(_world_stats_subscribe_loop())
 
 @trollius.coroutine
 def _publish_loop():
@@ -36,20 +70,8 @@ def reset():
     loop = trollius.get_event_loop()
     loop.run_until_complete(_publish_loop())
 
-def _world_stats_callback(data):
-    world_stats = pygazebo.msg.world_stats_pb2.WorldStatistics()
-    world_stats.ParseFromString(data)
-    print "Time  ", world_stats.real_time
 
-def _world_stats_subscribe_loop():
-    manager = yield From(pygazebo.connect(('localhost', 11345)))
-    subscriber = manager.subscribe('/gazebo/default/world_stats', 'gazebo.msgs.WorldStatistics', _position_callback)
-    while True:
-        yield From(subscriber.wait_for_connection())
 
-def world_stats():
-    loop = trollius.get_event_loop()
-    loop.run_until_complete(_world_stats_subscribe_loop())
 
 def _position_callback(data):
     try:
@@ -155,8 +177,11 @@ def reset_model():
     loop = trollius.get_event_loop()
     loop.run_until_complete(_reset_model())#_world_control_subscribe_loop())
 
-try:
-    reset_model()
-except Exception as e:
-    print e
+
+if __name__ == "__main__":
+    world_stat = GazeboWorldStats("localhost", 11345)
+    def sim_time_callback(sim_time):
+        print "Start Sim Time", sim_time.sec
+    world_stat.get_sim_time(sim_time_callback)
+
 

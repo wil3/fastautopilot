@@ -1,98 +1,49 @@
+from sim.gazebo.gazeboapi import GazeboWorldStats
 
 from dronekit import connect, Command, LocationGlobal
 from pymavlink import mavutil
 import time, sys, argparse, math
 
-import multiprocessing as mp
+#import multiprocessing as mp
 
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from mpl_toolkits.mplot3d import Axes3D
-import mpl_toolkits.mplot3d.axes3d as p3
+from tracker import *
 
-
-class MyFuncAnimation(animation.FuncAnimation):
-    """
-    Unfortunately, it seems that the _blit_clear method of the Animation
-    class contains an error in several matplotlib verions
-    That's why, I fork it here and insert the latest git version of
-    the function.
-    """
-    def _blit_clear(self, artists, bg_cache):
-        # Get a list of the axes that need clearing from the artists that
-        # have been drawn. Grab the appropriate saved background from the
-        # cache and restore.
-        axes = set(a.axes for a in artists)
-        for a in axes:
-            if a in bg_cache: # this is the previously missing line
-                a.figure.canvas.restore_region(bg_cache[a])
 
 
 connection_string       = '127.0.0.1:14540'
 MAV_MODE_AUTO   = 4
+START_TIME = 0
+END_TIME = 0
 
 # Connect to the Vehicle
 print "Connecting"
 vehicle = connect(connection_string, wait_ready=True)
 
-manager = mp.Manager()
-lock = mp.Lock()
+#manager = mp.Manager()
+#lock = mp.Lock()
+#lock_att = mp.Lock()
 
 
-
-
+"""
+# Keep track of total trajectory
+# To plot need them as separate lists
 lat = manager.list()
 lon = manager.list()
 alt = manager.list()
 
-loc = manager.list()
+#is is better ot keep a single time? or for each?
+att_time = manager.list()
+thrust = manager.list()
+yaw = manager.list()
+roll = manager.list()
+pitch = manager.list()
 
+q_loc = mp.Queue()
+q_att = mp.Queue()
+"""
+list_loc = []
+list_att = []
 
-def init_tracker(l, _lat, _lon, _alt):
-    print "Init tracker"
-    #init home values
-    arr_lat = np.asarray(_lat) 
-    arr_lon = np.asarray(_lon) 
-    arr_alt = np.asarray(_alt)
-    fig = plt.figure()
-
-    ax = fig.gca(projection='3d')
-    ax.set_xlabel("Latitude")
-    ax.set_ylabel("Longitude")
-    ax.set_zlabel("Altitude")
-    """
-    ax.set_xlim3d([0.0, 50.0])
-    ax.set_ylim3d([0.0, 10.0])
-    ax.set_zlim3d([0.0, 15.0])
-    """
-
-    print "Lat len", len(arr_lat)
-    print "Lon len", len(arr_lon)
-    print "Alt len", len(arr_alt)
-    line, = ax.plot(arr_lat, arr_lon, arr_alt)
-
-    def update_tracker(num, __lat, __lon, __alt):
-        try:
-            l.acquire()
-            arr_lat = np.asarray(__lat) 
-            arr_lon = np.asarray(__lon) 
-            arr_alt = np.asarray(__alt)
-            # Resize 
-            ax.set_xlim3d([min(arr_lat), max(arr_lat)])
-            ax.set_ylim3d([min(arr_lon), max(arr_lon)])
-            ax.set_zlim3d([min(arr_alt), max(arr_alt)])
-            ax.figure.canvas.draw()
-
-            line.set_data(arr_lat, arr_lon)
-            line.set_3d_properties(arr_alt)
-            l.release()
-        except Exception as e:
-            print "E1", e
-        return line,
-
-    line_ani =MyFuncAnimation(fig, update_tracker, 25, fargs=(_lat, _lon, _alt),  interval=50, blit=False)
-    plt.show()
 
 
 
@@ -138,8 +89,6 @@ home_position_set = False
 @vehicle.on_message('HOME_POSITION')
 def listener(self, name, home_position):
     global home_position_set
- 
-
     home_position_set = True
 
 @vehicle.on_attribute('attitude')
@@ -147,6 +96,7 @@ def attitude_listener(self, name, attitude):
     #print "yaw={} pitch={} roll={}".format(attitude.yaw, attitude.pitch, attitude.roll)
     #print "gps={}".format(vehicle.gps_0)
     pass
+
 @vehicle.on_attribute('location')
 def location_listener(self, name, location):
     curr_lat = location.global_relative_frame.lat
@@ -156,27 +106,54 @@ def location_listener(self, name, location):
        return 
 
     #only update if sometihng changed
+    """
     if (len(lat) > 0 and lat[-1] == curr_lat and 
        len(lon) > 0 and lon[-1] == curr_lon and 
        len(alt) > 0 and alt[-1] == curr_alt):
         return 
+    """
 
-    print "Lat=", curr_lat, " Lon=", curr_lon, " Alt=", curr_alt
-    lock.acquire()
-    lat.append(curr_lat)
-    lon.append(curr_lon)
-    alt.append(curr_alt)
-    lock.release()
+#    print "Lat=", curr_lat, " Lon=", curr_lon, " Alt=", curr_alt
+    if vehicle.armed:
+        list_loc.append(location.global_relative_frame)
+        """
+        q_loc.put(location.global_relative_frame)
+        lock.acquire()
+        lat.append(curr_lat)
+        lon.append(curr_lon)
+        alt.append(curr_alt)
+        lock.release()
+        """
 
-dt_thrust = 0
-dt_yaw = 0
-dt_roll = 0
-dt_pitch = 0
+time_boot = -1 
 
 @vehicle.on_message('ATTITUDE_TARGET')
 def attitude_target_listener(self, name, target):
-    pass
-    #print "Target: ", target
+    global time_boot 
+
+
+    """
+    if (len(roll) > 0 and roll[-1] == target.body_roll_rate and
+        len(pitch) > 0 and pitch[-1] == target.body_pitch_rate and
+        len(yaw) > 0 and yaw[-1] == target.body_yaw_rate and
+        len(thrust) > 0 and thrust[-1] == target.thrust):
+        return
+    """
+
+    if vehicle.armed:
+        if time_boot < 0:
+            time_boot = target.time_boot_ms
+        list_att.append(target)
+        """
+        q_att.put(target)
+        lock_att.acquire()
+        att_time.append(target.time_boot_ms - time_boot) 
+        roll.append(target.body_roll_rate)
+        pitch.append(target.body_pitch_rate)
+        yaw.append(target.body_yaw_rate)
+        thrust.append(target.thrust)
+        lock_att.release()
+        """
 ################################################################################################
 # Start mission example
 ################################################################################################
@@ -189,12 +166,14 @@ while not home_position_set:
 
 
 #Init position
+"""
 location = vehicle.location
 lat.append(location.global_relative_frame.lat)
 lon.append(location.global_relative_frame.lon)
 alt.append(location.global_relative_frame.alt)
-p = mp.Process(target=init_tracker, args=(lock, lat, lon, alt, ))
-p.start() 
+"""
+#p = Tracker(q_loc, q_att)#mp.Process(target=init_tracker, args=(q_loc, q_att))#lock,lock_att, lat, lon, alt, att_time,  thrust, yaw, pitch, roll))
+#p.start() 
 
 # Display basic vehicle state
 print " Type: %s" % vehicle._vehicle_type
@@ -211,15 +190,18 @@ time.sleep(1)
 cmds = vehicle.commands
 cmds.clear()
 
+wp_loc = []
 home = vehicle.location.global_relative_frame
-
+wp_loc.append(home)
 # takeoff to 10 meters
 wp = get_location_offset_meters(home, 0, 0, 10);
+wp_loc.append(wp)
 cmd = Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 1, 0, 0, 0, 0, wp.lat, wp.lon, wp.alt)
 cmds.add(cmd)
 
 # move 10 meters north
 wp = get_location_offset_meters(wp, 3, 0, 0);
+wp_loc.append(wp)
 cmd = Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 1, 0, 0, 0, 0, wp.lat, wp.lon, wp.alt)
 cmds.add(cmd)
 
@@ -235,6 +217,19 @@ time.sleep(2)
 
 # Arm vehicle
 vehicle.armed = True
+
+
+def start_sim_time_callback(sim_time):
+    print "Start Sim Time", sim_time.sec
+    START_TIME = sim_time.sec
+    
+def end_sim_time_callback(sim_time):
+    print "End Sim Time", sim_time.sec
+    END_TIME = sim_time.sec
+    print "Lapse time ", END_TIME - START_TIME
+
+#world_stat = GazeboWorldStats("localhost", 11345)
+#world_stat.get_sim_time(start_sim_time_callback)
 
 # monitor mission execution
 nextwaypoint = vehicle.commands.next
@@ -252,6 +247,9 @@ while vehicle.commands.next > 0:
 
 # Disarm vehicle
 vehicle.armed = False
+
+#world_stat.get_sim_time(end_sim_time_callback)
+
 time.sleep(1)
 
 
@@ -260,4 +258,10 @@ time.sleep(1)
 vehicle.close()
 time.sleep(1)
 
-p.join()
+print "Vehicle closed"
+#p.join()
+
+data = FlightData()
+data.trajectory(list_loc,wp_loc)
+data.inputs(list_att)
+data.show()
