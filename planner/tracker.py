@@ -61,6 +61,8 @@ class FlightData(object):
             self.thrust.append(input.thrust)
             self.t.append(input.time_boot_ms)
 
+
+
     def trajectory(self, data, wp):
         self._split_trajectory_data(data)
         (wp_lat, wp_lon, wp_alt) = self._split_waypoint_data(wp)
@@ -78,6 +80,7 @@ class FlightData(object):
         ax1.set_ylabel("Thrust")
         #ax1.set_ylim([0, 1.2])
         ax1.plot(self.t, self.thrust)
+        ax1.plot(self.t[1:], np.diff(self.thrust), 'r--')
 
         ax2.plot(self.t, self.pitch)
         ax2.set_ylabel("Pitch")
