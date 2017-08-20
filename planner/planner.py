@@ -51,7 +51,7 @@ class PX4Quadrotor(Vehicle):
 
         self.curr_mode = None
 
-        self.target_loc = []
+        self.target_pos = []
 
         self.running = False
 
@@ -200,14 +200,15 @@ class PX4Quadrotor(Vehicle):
                 print "Changed modes ",self.mode
                 self.curr_mode = self.mode
 
-    def set_position_target_local_ned(self):
+    def set_position_target_local_ned(self, x, y, z):
+
         self._master.mav.set_position_target_local_ned_send(
             0, #time boot not used
-            self._master.target_system,
-            self._master.target_component,
+            0, #self._master.target_system,
+            0, #self._master.target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
             0b0000111111111000,
-            0, 0, -10, # x y z in m
+            x, y, z, # x y z in m
             0, 0, 0, # vx, vy, vz
             0, 0, 0, # afx, afy, afz
             0, 0
@@ -268,18 +269,23 @@ class PX4Quadrotor(Vehicle):
         print "Lapse time ", END_TIME - START_TIME
 
     def arm(self):
-        self.armed = True
+        self.armed = True 
         while not self.armed:      
-                print " Waiting for arming..."
-                time.sleep(1)
+                time.sleep(0.5)
+
+    def disarm(self):
+        self.armed = False 
+        while self.armed:      
+                time.sleep(0.5)
 
     def set_point(self):
         while self.running:
-            self.takeoff()
+            self.set_position_target_local_ned(self.target_pos[0], self.target_pos[1], self.target_pos[2])
+            #self.takeoff()
             time.sleep(0.1)
 
     def arm_and_takeoff(self):
-        self.target_loc = [0, 0, -2]
+        self.target_pos = [0, 0, -2]
         #while not self.home_position_set:
         #    print "Waiting for home position..."
         #    time.sleep(1)
@@ -375,6 +381,9 @@ class PX4Quadrotor(Vehicle):
         self.arm_and_takeoff()
         time.sleep(3)
         print "Landing"
+        self.target_pos = [0, 0, -1 * self.list_loc[-1].z ]
+        time.sleep(3)
+        self.disarm()
         #self.land()
         self.shutdown()
 
