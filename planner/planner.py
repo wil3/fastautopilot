@@ -3,10 +3,11 @@ from sim.gazebo.gazeboapi import GazeboWorldStats
 from dronekit import connect, Command, LocationGlobal, Vehicle, VehicleMode
 from pymavlink import mavutil
 import time, sys, argparse, math
-
+import numpy as np
 from tracker import *
 from mission import set_mission
 import threading
+from collections import deque
 
 class PX4Quadrotor(Vehicle):
     """
@@ -20,6 +21,8 @@ class PX4Quadrotor(Vehicle):
 
     MUST PUBLISH FASTER THAN  2HZ TO STAY IN OFFBOARD
     https://dev.px4.io/en/ros/mavros_offboard.html
+
+
     """
 
     MAV_MODE_AUTO   = 4
@@ -30,16 +33,19 @@ class PX4Quadrotor(Vehicle):
     START_TIME = 0
     END_TIME = 0
 
+    PT_R = 1.0
+    SAMPLE_RATE = 10 
+    SET_PT_RATE = 20
+
+    INIT_ALTITUDE = -2
+
     def __init__(self, *args):
         super(PX4Quadrotor, self).__init__(*args)
 
-
-        self.home_position_set = False
-
         # Track the trajectory
-        self.list_loc = []
+        self.flight_trajectory = []
         # Track the inputs
-        self.list_att = []
+        self.flight_attitudes = []
         # The waypoint locations
         self.wp_loc = []
 
@@ -55,7 +61,12 @@ class PX4Quadrotor(Vehicle):
 
         self.running = False
 
-        #self._master.mav.set_send_callback(self.send_callback)
+        self.race_end = False
+
+        self.record= False
+
+        self.curr_land_state = None
+
 
         """
         Each message is sent at a certain rate as defined in configure_stream
@@ -67,20 +78,6 @@ class PX4Quadrotor(Vehicle):
             self.current_time = time.time_unix_usec
             #print "T=", time.time_boot_ms   
 
-
-        #Create a message listener for home position fix
-        @self.on_message('HOME_POSITION')
-        def listener(self, name, home_position):
-            self.home_position_set = True
-
-        @self.on_message('ATT_POS_MOCAP')
-        def l(self,name, data):
-            #print data
-            pass
-        #@self.on_message('HEARTBEAT')
-        #def heartbeat(self, name, data):
-            #print data
-            pass
         @self.on_message('ATT_POS_MOCAP')
         def mocap(self, name, data):
             print data
@@ -98,99 +95,40 @@ class PX4Quadrotor(Vehicle):
                 return
             """
 
-            if self.armed:
+            if self.armed and self.record:
                 #if time_boot < 0:
                 #    time_boot = target.time_boot_ms
-                self.list_att.append(target)
+                self.flight_attitudes.append(target)
 
         @self.on_message('EXTENDED_SYS_STATE')
         def landed_state_listener(self, name, state):
-            if state.landed_state == self.MAV_LANDED_STATE_ON_GROUND: 
-                #print "Drone on the ground"
-                pass
+            if (state.landed_state == self.MAV_LANDED_STATE_ON_GROUND and
+            self.race_end and self.arm):
+                print "Drone on the ground"
+                self.arm = False
+                self.running = False
 
-        @self.on_message('GLOBAL_POSITION_INT')
-        def gps_listener(self, name, data):
-            #print "GPS ", data
-            pass
+            # The MAV_LANDED_STATE_TAKEOFF state is not being sent
+            # so detect takeoff our self
+            elif (self.curr_land_state == self.MAV_LANDED_STATE_ON_GROUND and
+            state.landed_state == mavutil.mavlink.MAV_LANDED_STATE_IN_AIR):
+                print "RACE BEGIN!"
+                self.record = True
+
+            self.curr_land_state = state.landed_state
+
         @self.on_message('LOCAL_POSITION_NED')
         def local_position_ned_listener(self, name, data):
             #print data
             #pass
             self.local_position_ned = data
-            self.list_loc.append(data)
+            self.flight_trajectory.append(data)
 
-        @self.on_message('COMMAND_ACK')
-        def ack(self, name, data):
-            #print data
-            pass
-
-        @self.on_message('GPS_RAW_INT')
-        def gps_listener(self, name, data):
-            #print "GPS RAW", data
-            pass
         @self.on_attribute('attitude')
         def attitude_listener(self, name, attitude):
             #print "yaw={} pitch={} roll={}".format(attitude.yaw, attitude.pitch, attitude.roll)
             #print "gps={}".format(vehicle.gps_0)
             pass
-
-
-        @self.on_attribute('location')
-        def location_listener(self, name, location):
-            curr_lat = location.global_relative_frame.lat
-            curr_lon = location.global_relative_frame.lon 
-            curr_alt = location.global_relative_frame.alt
-            if curr_lat == None or curr_lon == None or curr_alt == None:
-               return 
-
-            #only update if sometihng changed
-            """
-            if (len(lat) > 0 and lat[-1] == curr_lat and 
-               len(lon) > 0 and lon[-1] == curr_lon and 
-               len(alt) > 0 and alt[-1] == curr_alt):
-                return 
-            """
-            if self.armed:
-                #print "Lat={} Lon={} Alt={}".format(curr_lat, curr_lon, curr_alt)
-                #self.list_loc.append(location.global_relative_frame)
-                pass
-
-        #time_boot = -1 
-
-
-    def PX4setMode(self, mode, custom_mode):
-        # The mode is specific to what the controller supports
-        self._master.mav.command_long_send(self._master.target_system, self._master.target_component,
-                                                   mavutil.mavlink.MAV_CMD_DO_SET_MODE, 
-                                                   mode,
-                                                   custom_mode,
-                                                   0, 0, 0, 0, 0, 0)
-    def mav_cmd_nav_land_local(self, x, y, z):
-        self._master.mav.command_long_send(self._master.target_system, self._master.target_component,
-                                           mavutil.mavlink.MAV_CMD_NAV_LAND_LOCAL, 0,
-                                           0, 1, 0,
-                                           x, y, z,0)
-
-    def mav_cmd_nav_land(self, x, y, z):
-        self._master.mav.command_long_send(self._master.target_system, self._master.target_component,
-                                           mavutil.mavlink.MAV_CMD_NAV_LAND, 0,
-                                           0, 0, 0,
-                                           x, y, z,0)
-    def mav_cmd_nav_takeoff_local(self, x, y, z):
-        self._master.mav.command_long_send(self._master.target_system, self._master.target_component,
-                                           mavutil.mavlink.MAV_CMD_NAV_TAKEOFF_LOCAL, 0,
-                                           0, 10, 0,
-                                           x, y, z,0)
-
-    def mav_cmd_nav_guided_enable(self, enable=True):
-        
-        value = 0
-        if enable:
-            value = 1
-        print self._master.mav.command_long_send(self._master.target_system, self._master.target_component,
-                                           self.MAV_CMD_NAV_GUIDED_ENABLE, value,
-                                           0, 0, 0, 0, 0, 0, 0)
 
     def keep_in_offboard_mode(self, rate):
         while self.running:
@@ -200,13 +138,23 @@ class PX4Quadrotor(Vehicle):
                 print "Changed modes ",self.mode
                 self.curr_mode = self.mode
 
+    def set_max_horizontal_velocity(self, v):
+        self._master.mav.param_set_send(
+            0,
+            0,
+            "MPC_XY_VEL_MAX",
+            v,
+            mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+        )
+
+
     def set_position_target_local_ned(self, x, y, z):
 
         self._master.mav.set_position_target_local_ned_send(
             0, #time boot not used
             0, #self._master.target_system,
             0, #self._master.target_component,
-            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED, #Positions are relative to the vehicles home position
             0b0000111111111000,
             x, y, z, # x y z in m
             0, 0, 0, # vx, vy, vz
@@ -256,9 +204,6 @@ class PX4Quadrotor(Vehicle):
         # send command to vehicle
         self.send_mavlink(msg)
 
-    def send_callback(self, msg):
-        print "Message ", msg
-
     def start_sim_time_callback(self, sim_time):
         print "Start Sim Time", sim_time.sec
         START_TIME = sim_time.sec
@@ -273,61 +218,85 @@ class PX4Quadrotor(Vehicle):
         while not self.armed:      
                 time.sleep(0.5)
 
-    def disarm(self):
-        self.armed = False 
-        while self.armed:      
-                time.sleep(0.5)
 
-    def set_point(self):
-        while self.running:
-            self.set_position_target_local_ned(self.target_pos[0], self.target_pos[1], self.target_pos[2])
-            #self.takeoff()
-            time.sleep(0.1)
-
-    def arm_and_takeoff(self):
-        self.target_pos = [0, 0, -2]
-        #while not self.home_position_set:
-        #    print "Waiting for home position..."
-        #    time.sleep(1)
-
-        #cmds = self.commands
-        #cmds.clear()
-        #self.mode = VehicleMode("GUIDED")
-        #self.PX4setMode(mavutil.mavlink.MAV_MODE_GUIDED_ARMED, 0)
-        #self.PX4setMode(0, self.MAV_MODE_AUTO)
-        print "Priming..."
-        i = 0
-        for i in range(100):
-            self.takeoff()
-            time.sleep(0.1)
-
+    def _d(self, pt1, pt2):
         """
-        t = threading.Thread(target=self.set_point)
-        t.start()
-        self.threads.append(t)
-        time.sleep(5)
+        Return distance between two points
         """
+        a = np.array(pt1)
+        b = np.array(pt2)
+        d = np.linalg.norm(a-b)
+#        print "D=", d, " running? ", self.running
+        return d
+
+
+
+    def _sleep(self, start, rate):
+        """
+        Sleep for specified time based on the starting time
+        and the rate in which command should execute
+        """
+        lapse = time.time() - start
+        T = 1/float(self.SET_PT_RATE)
+        if lapse < T:
+            time.sleep(T - lapse)
+
+
+
+    def waypoint_reached_callback(self, number, pt):
+        print "Waypoint reached ", pt
+        if number == 0: # First waypoint reached, ie has taken off
+            #self.record = True #Start recording
+            pass
+        elif number == (len(self.waypoints()) -2):
+            print "Race stopped"
+            self.record = False 
+            self.race_end = True
+
+    def mission_loop(self, callback=None):
+        # Way points are local and relative
+        wp = self.waypoints()
+        count = 0
+        while self.running and wp:
+            set_pt = wp.popleft()
+            print "Next set point ", set_pt
+            self.set_point(set_pt)
+            if callback:
+                callback(count, set_pt)
+            count += 1 
+
+        print "All waypoints reached"
+
+        #Land
+        # TODO Why does this trigger land? Bit mask not set
+        # maybe due to altitude
+        land_pt = [self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, -1 * self.flight_trajectory[-1].z]
+        self.set_point(land_pt)
+
         
-        #First send data points
-        print "Done priming setpoint"
-
-        #for i in range(4):
-
+    def set_point(self, set_pt):
         """
-        while self.mode.name != "OFFBOARD":
-            print "Waiting ", self.mode.name
-            time.sleep(1)
-            """
+        Monitor the progress and set the next point 
+        once reached
+        """
+        # While we have not reached our destination keep setting our next set point
+        # at the predefined rate
+        while self.running:
+            start = time.time() # TODO move to _d?
+            if self._d(set_pt,[self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, self.flight_trajectory[-1].z]) <= self.PT_R:
+                break
+            self.set_position_target_local_ned(set_pt[0], set_pt[1], set_pt[2])
+            self._sleep(start, self.SET_PT_RATE)
+
+
+    def arm_and_begin(self):
+
         print "Mode set to ", self.mode.name
-
-        #time.sleep(5)
-
-        #self.groundspeed = 5
         t = threading.Thread(target=self.keep_in_offboard_mode, args=(4,))
         t.start()
         self.threads.append(t)
 
-        t = threading.Thread(target=self.set_point)
+        t = threading.Thread(target=self.mission_loop, args=(self.waypoint_reached_callback,))
         t.start()
         self.threads.append(t)
 
@@ -335,163 +304,59 @@ class PX4Quadrotor(Vehicle):
             print "Waiting ", self.mode.name
             time.sleep(1)
 
-        #print "Mode set to ", self.mode.name 
-
         print "Arming..."
+        #self.arm = True
         self.arm()
         print "Arming complete"
 
-        print "Taking off ", self.mode.name
-        #time.sleep(10)
-        #self.mav_cmd_nav_guided_enable()
-        #time.sleep(1)
-        #time.sleep(1)
-        #targetAltitude = 5 
-        time.sleep(10)
-        #self.groundspeed = 5
-        #self.airspeed = 5
-        #self.set_position_target_local_ned()
-        #for i in range(10):
-        #    self.takeoff()
-        #    time.sleep(0.25)
-        #time.sleep(5)
-        #self.simple_takeoff(targetAltitude)
-        #self.mav_cmd_nav_takeoff_local(0, 0, -targetAltitude)
+
+
+    def waypoints(self):
+        return self.wp_pentagon()
+        #return self.wp_line()
+
+    def wp_line(self):
+        return deque([ 
+                [0, 0, -2], # takeoff
+                [10, 0, -2],
+                [20, 0, -2],
+                [30, 0, -2],
+                [40, 0, -2],
+        ])
+
+    def wp_pentagon(self):
+        return deque([ 
+                [0, 0, self.INIT_ALTITUDE], # takeoff
+                [10, 0, -2],
+                [15, 5, -2],
+                [10, 10,-2],
+                [0, 10, -2],
+                [-10, 10, -2],
+        ])
 
     def shutdown(self):
+        print "Shutting down.."
         self.running = False
         for t in self.threads:
             t.join()
 
-    def land(self):
-        print("Setting LAND mode...")
-        #self.mode = VehicleMode("LAND")
-        self._master.set_mode_px4('LAND', None, None)
-        #self.mav_cmd_nav_land(0, 0, 0)
-        #self.mav_cmd_nav_land_local(1, 1, 0)
-        #time.sleep(3)
-        #self.armed = False
-        time.sleep(1)
-        self.close()
-        time.sleep(1)
-        print "Vehicle closed"
-
     def fly(self):
+        self.set_max_horizontal_velocity(1.0)
         self.running = True
-        self.arm_and_takeoff()
-        time.sleep(3)
-        print "Landing"
-        self.target_pos = [0, 0, -1 * self.list_loc[-1].z ]
-        time.sleep(3)
-        self.disarm()
-        #self.land()
-        self.shutdown()
+        self.arm_and_begin()
 
-    def square(self):
-
-
-	print("SQUARE path using SET_POSITION_TARGET_LOCAL_NED and position parameters")
-	DURATION = 20 #Set duration for each segment.
-
-	print("North 50m, East 0m, 10m altitude for %s seconds" % DURATION)
-	self.goto_position_target_local_ned(50,0,-10)
-	print("Point ROI at current location (home position)") 
-# NOTE that this has to be called after the goto command as first "move" command of a particular type
-# "resets" ROI/YAW commands
-	#self.set_roi(vehicle.location.global_relative_frame)
-	time.sleep(DURATION)
-
-	print("North 50m, East 50m, 10m altitude")
-	self.goto_position_target_local_ned(50,50,-10)
-	time.sleep(DURATION)
-
-	print("Point ROI at current location")
-	#self.set_roi(vehicle.location.global_relative_frame)
-
-	print("North 0m, East 50m, 10m altitude")
-	self.goto_position_target_local_ned(0,50,-10)
-	time.sleep(DURATION)
-
-	print("North 0m, East 0m, 10m altitude")
-	self.goto_position_target_local_ned(0,0,-10)
-	time.sleep(DURATION)
-
-
-
-
-    def fly2(self):
-
-        self.arm_and_takeoff()
-        self.square()
-        # wait for a home position lock
-        #while not self.home_position_set:
-        #    print "Waiting for home position..."
-        #    time.sleep(1)
-
-        # Change to AUTO mode
-        #self.PX4setMode(self.MAV_MODE_AUTO)
-        #time.sleep(3)
-        #self.arm()
-        #targetAltitude = 10 
-
-        #self.simple_takeoff(targetAltitude)
-        #self.mav_cmd_nav_takeoff_local(0, 0, targetAltitude)
-        #print "Takeing off"
-        #time.sleep(5)
-
-        self.mav_cmd_nav_guided_enable()
-        time.sleep(1)
-        self.PX4setMode(self.MAV_MODE_GUIDED_ARMED)
-        time.sleep(1)
-        print "Mode ", self.mode
-
-
-        self.goto_position_target_local_ned(0, 1, 0)
-        time.sleep(1)
-        #self.goto_position_target_local_ned(0, -1, 0)
-        #time.sleep(1)
-        self.mav_cmd_nav_land_local(1, 1, 0)
-
-        #set_mission(self)
-# Load commands
-        time.sleep(2)
-
-# Arm vehicle
-#world_stat = GazeboWorldStats("localhost", 11345)
-#world_stat.get_sim_time(start_sim_time_callback)
-
-# monitor mission execution
-        """
-        nextwaypoint = self.commands.next
-        while nextwaypoint < len(self.commands):
-            if self.commands.next > nextwaypoint:
-                display_seq = self.commands.next+1
-                print "Moving to waypoint %s" % display_seq
-                nextwaypoint = self.commands.next
+        while self.running:
             time.sleep(1)
-# wait for the vehicle to land
-        while self.commands.next > 0:
-            time.sleep(1)
-        """
-# Disarm vehicle
-        self.armed = False
-
-#world_stat.get_sim_time(end_sim_time_callback)
-
-        time.sleep(1)
-# Close vehicle object before exiting script
-        self.close()
-        time.sleep(1)
-
-        print "Vehicle closed"
-#p.join()
+        
+        for t in self.threads:
+            t.join()
 
 
 
     def print_stats(self):
         data = FlightData()
-        data.trajectory(self.list_loc,self.wp_loc)
-        data.inputs(self.list_att)
+        data.trajectory(self.flight_trajectory, self.waypoints())
+        data.inputs(self.flight_attitudes)
         data.show()
 
 if __name__ == "__main__":
@@ -501,6 +366,7 @@ if __name__ == "__main__":
     v = connect(connection_string, wait_ready=True, vehicle_class=PX4Quadrotor)
     #pilot = FastVehicle()
     v.fly()
-    #v.print_stats()
+    print "Stats..."
+    v.print_stats()
     #time.sleep(10)
 
