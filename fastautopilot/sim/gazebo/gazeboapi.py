@@ -15,22 +15,30 @@ import trollius
 from trollius import From
 import trollius as asyncio
 
-class GazeboAPI(object):
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-
-class GazeboWorldStats(GazeboAPI):
+import traceback
+class GazeboAPI:
+    MODEL_NAME = "iris"
+    ORIGIN_TOL = 0.1
     TOPIC = '/gazebo/default/world_stats'
     TYPE = 'gazebo.msgs.WorldStatistics'
 
     def __init__(self, host, port):
-        super(GazeboWorldStats, self).__init__(host, port)
+        self.host = host
+        self.port = port
+
+        self.pose_info_subscriber = None
+        self.waiting_for_message = True
 
     def get_sim_time(self, callback):
         self.callback = callback
         loop = trollius.get_event_loop()
         loop.run_until_complete(self._world_stats_subscribe_loop())
+
+    """
+    def get_world_stats_once(self, callback):
+        loop = trollius.get_event_loop()
+        loop.run_until_complete(_world_stats_subscribe_loop())
+    """
 
     def _world_stats_subscribe_loop(self):
         #manager = yield From(self._manager()) 
@@ -48,10 +56,57 @@ class GazeboWorldStats(GazeboAPI):
             self.callback(world_stats.sim_time)
         self.waiting = False
 
+    def _world_reset_message(self):
+        world = pygazebo.msg.world_control_pb2.WorldControl()
+        world.reset.model_only = True 
+        return world
 
-    def get_world_stats_once(self, callback):
+    # TODO Replace with common distance function
+    # FIXME Not checking z, shouldnt happen because we've landed but still
+    def _at_origin(self, pose):
+        if math.fabs(pose.position.x) < self.ORIGIN_TOL and math.fabs(pose.position.y) < self.ORIGIN_TOL:
+            return True
+        else:
+            return False
+
+    def _reset_callback(self, data):
+        msg = pygazebo.msg.poses_stamped_pb2.PosesStamped()
+        msg.ParseFromString(data)
+        for pose in msg.pose:
+            if pose.name == self.MODEL_NAME:
+                if self._at_origin(pose):
+                    self.waiting_for_message = False
+                break
+
+    def _reset_model(self):#, future):
+        
+        #start listening for the event
+        manager = yield From(pygazebo.connect((self.host, self.port)))
+        publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
+        self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
+        world = self._world_reset_message()
+        self.waiting_for_message = True
+        while self.waiting_for_message: 
+            yield From(publisher.publish(world))
+            yield From(trollius.sleep(0.5))
+            yield From(self.pose_info_subscriber.wait_for_connection())
+
+        #self.pose_info_subscriber.remove()
+        #self.reset_model_callback()
+        #future.set_result('Done!')
+
+    def reset_model(self, callback):
+        #self.reset_model_callback = callback
         loop = trollius.get_event_loop()
-        loop.run_until_complete(_world_stats_subscribe_loop())
+        #future = asyncio.Future()
+        #asyncio.ensure_future(self._reset_model(future))
+        #loop.run_until_complete(future)
+        #print(future.result())
+
+        loop.run_until_complete(self._reset_model())
+        callback()
+        loop.close()
+
 
 @trollius.coroutine
 def _publish_loop():
@@ -60,7 +115,6 @@ def _publish_loop():
     world = pygazebo.msg.world_control_pb2.WorldControl()
     world.reset.model_only = True 
 
-    #for i in range(2):
     while True:
         print("Publish message")
         yield From(publisher.publish(world))
@@ -69,8 +123,6 @@ def _publish_loop():
 def reset():
     loop = trollius.get_event_loop()
     loop.run_until_complete(_publish_loop())
-
-
 
 
 def _position_callback(data):
@@ -130,58 +182,21 @@ def _world_control_reset_publish(manager):
         yield From(publisher.publish(world))
         yield From(trollius.sleep(0.5))
 
-def _world_reset_message():
-    world = pygazebo.msg.world_control_pb2.WorldControl()
-    world.reset.model_only = True 
-    return world
 
 
-TOL = 0.1
-subscriber = None
+class TestReset:
+    def reset_callback(self):
+        print "Model reset"
 
-def at_origin(pose):
-    if math.fabs(pose.position.x) < TOL and math.fabs(pose.position.y) < TOL:
-        return True
-    else:
-        return False
-
-def _reset_callback(data):
-    try:
-        msg = pygazebo.msg.poses_stamped_pb2.PosesStamped()
-        msg.ParseFromString(data)
-        for pose in msg.pose:
-            print pose
-            if pose.name == "iris":
-                if at_origin(pose):
-                    waiting_for_reset = False
-                    print "RESET!"
-                    subscriber.remove()
-                break
-    except Exception as e:
-        print e
-
-def _reset_model():
-    
-    #start listening for the event
-    manager = yield From(pygazebo.connect(('localhost', 11345)))
-    publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
-    subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', _reset_callback)
-    world = _world_reset_message()
-    #while waiting_for_reset:
-    #yield From(publisher.publish(world))
-    yield From(trollius.sleep(5))
-    print "Looking for reset message"
-    yield From(subscriber.wait_for_connection())
-
-def reset_model():
-    loop = trollius.get_event_loop()
-    loop.run_until_complete(_reset_model())#_world_control_subscribe_loop())
-
+    def reset_test(self):
+        api = GazeboAPI("localhost", 11345)
+        api.reset_model(self.reset_callback)
 
 if __name__ == "__main__":
+    """
     world_stat = GazeboWorldStats("localhost", 11345)
     def sim_time_callback(sim_time):
         print "Start Sim Time", sim_time.sec
     world_stat.get_sim_time(sim_time_callback)
-
-
+    """
+    TestReset().reset_test()

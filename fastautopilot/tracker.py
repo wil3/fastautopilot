@@ -22,9 +22,12 @@ class MyFuncAnimation(animation.FuncAnimation):
             if a in bg_cache: # this is the previously missing line
                 a.figure.canvas.restore_region(bg_cache[a])
 
-class ControlInputs(object):
-    def __init__(self, t, roll, pitch, yaw, thrust):
-        self.t = t
+class ControlInput(object):
+    def __init__(self, roll, pitch, yaw, thrust):
+        """ Each parameter is an array of tuples (boot_ms, data_value)
+        Since each control parameter can occur at a different time, each must be bound
+        to its own time stamp
+        """
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
@@ -32,28 +35,43 @@ class ControlInputs(object):
 
 class FlightData(object):
 
-    def __init__(self):
-        self.lat = []
-        self.lon = [] 
-        self.alt = []
+    def __init__(self, waypoints, raw_position_data, raw_attitude_data):
 
+
+        (self.t, self.roll, self.pitch, self.yaw, self.thrust) = self._split_input_data(raw_attitude_data)
+        """
         self.yaw = []
         self.thrust = []
         self.roll = []
         self.pitch = []
         self.t = []
+        """
 
-    def _split_trajectory_data(self, data):
-        for loc in data:
-            (x, y, z) = self.NEDtoENUBodyFrame(loc.x, loc.y, loc.z)
-            self.lat.append(x)
-            self.lon.append(y)
-            self.alt.append(z)
+        (self.x, self.y, self.z) = self._split_trajectory_data(raw_position_data)
+        (self.wp_x, self.wp_y, self.wp_z) = self._convert_to_ENU(waypoints)
+
+        self.lat = []
+        self.lon = [] 
+        self.alt = []
+
 
     def NEDtoENUBodyFrame(self, x, y, z):
         return (x, -y, -z)
 
-    def _split_waypoint_data(self, data):
+    def _split_trajectory_data(self, data):
+        x = []
+        y = []
+        z = []
+        for loc in data:
+            (_x, _y, _z) = self.NEDtoENUBodyFrame(loc.x, loc.y, loc.z)
+            x.append(_x)
+            y.append(_y)
+            z.append(_z)
+
+        return (x, y, z)
+
+
+    def _convert_to_ENU(self, data):
         lat = []
         lon = []
         alt = []
@@ -72,34 +90,31 @@ class FlightData(object):
         return tuple of time and AETR values
         """
         t = []
-        aileron = []
-        elevator = []
-        rudder = []
-        throttle = []
+        roll = []
+        pitch = []
+        yaw = []
+        thrust = []
 
         for input in data:
-            self.roll.append(input.body_roll_rate)
-            self.pitch.append(input.body_pitch_rate)
-            self.yaw.append(input.body_yaw_rate)
-            self.thrust.append(input.thrust)
-            self.t.append(input.time_boot_ms)
+            roll.append(input.body_roll_rate)
+            pitch.append(input.body_pitch_rate)
+            yaw.append(input.body_yaw_rate)
+            thrust.append(input.thrust)
+            t.append(input.time_boot_ms)
 
-        return (t, aileron, elevator, throttle, rudder)
+        return (t, roll, pitch, yaw, thrust)
+
+    def control_inputs(self):
 
 
+        cp_roll = self._identify_control_points(self.t, self.roll)
+        cp_pitch = self._identify_control_points(self.t, self.pitch)
+        cp_yaw = self._identify_control_points(self.t, self.yaw)
+        cp_thrust = self._identify_control_points(self.t, self.thrust)
+        
+        return ControlInput(cp_roll, cp_pitch, cp_yaw, cp_thrust) 
 
-    def trajectory(self, data, wp):
-        self._split_trajectory_data(data)
-        (wp_lat, wp_lon, wp_alt) = self._split_waypoint_data(wp)
-        self._plot_trajectory(wp_lat, wp_lon, wp_alt)
-
-        self._plot_trajectory_2D(self.lat, self.lon, wp_lat, wp_lon)
-
-    def inputs(self, data):
-        self._split_input_data(data)
-        self._plot_input()
-
-    def identify_control_points(self, t, input):
+    def _identify_control_points(self, t, input):
         """ 
         Condense inputs to only those that matter, i.e., when a change
         actually occurs
@@ -172,6 +187,9 @@ class FlightData(object):
         ax.plot(wp_lat, wp_lon, 'ro', zs=wp_alt)
 
     def show(self):
+        self._plot_trajectory(wp_lat, wp_lon, wp_alt)
+        self._plot_trajectory_2D(self.lat, self.lon, wp_lat, wp_lon)
+        self._plot_input()
         plt.show()
 
 class Tracker(Process):
