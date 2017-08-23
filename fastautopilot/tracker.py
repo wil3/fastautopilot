@@ -35,9 +35,10 @@ class ControlInput(object):
 
 class FlightData(object):
 
-    def __init__(self, waypoints, raw_position_data, raw_attitude_data):
+    def __init__(self, gates, raw_position_data, raw_attitude_data):
 
 
+        self.gates = gates
         (self.t, self.roll, self.pitch, self.yaw, self.thrust) = self._split_input_data(raw_attitude_data)
         """
         self.yaw = []
@@ -48,7 +49,8 @@ class FlightData(object):
         """
 
         (self.x, self.y, self.z) = self._split_trajectory_data(raw_position_data)
-        (self.wp_x, self.wp_y, self.wp_z) = self._convert_to_ENU(waypoints)
+
+        #(self.wp_x, self.wp_y, self.wp_z) = self._convert_to_ENU(waypoints)
 
         self.lat = []
         self.lon = [] 
@@ -158,37 +160,39 @@ class FlightData(object):
         plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
 
 
-    def _plot_trajectory_2D(self, x, y, wp_x, wp_y):
+    def _plot_trajectory_2D(self, x, y):#, wp_x, wp_y):
         f, (ax1) = plt.subplots(1)
         ax1.set_ylabel("Y (m)")
         ax1.set_xlabel("X (m)")
         ax1.plot(x, y, label="Flight path")
-        ax1.plot(wp_x, wp_y, 'ro', label="Waypoints")
+#        ax1.plot(wp_x, wp_y, 'ro', label="Waypoints")
         ax1.set_title("Birds Eye View of Flight Path")
         ax1.legend()
 
-    def _plot_trajectory(self, wp_lat, wp_lon, wp_alt):
-        print wp_lat
-        print wp_lon
-        print wp_alt
+        for gate in self.gates:
+            gate.plot2d(ax1)
+
+    def _plot_trajectory(self, x, y, z):#, wp_x, wp_y, wp_z):
         fig = plt.figure()
 
         ax = fig.add_subplot(111, projection='3d')
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
-        ax.set_xlim3d([min(self.lat), max(self.lat)])
-        ax.set_ylim3d([min(self.lon), max(self.lon)])
-        ax.set_zlim3d([min(self.alt), max(self.alt)])
+#        ax.set_xlim3d([min(x), max(x)])
+#        ax.set_ylim3d([min(y), max(y)])
+#        ax.set_zlim3d([min(z), max(z)])
         plt.ticklabel_format(style='plain', axis='both')
 
-
-        line, = ax.plot(self.lat, self.lon, zs=self.alt)
-        ax.plot(wp_lat, wp_lon, 'ro', zs=wp_alt)
+        ax.plot(x, y, zs=z, label="Flight path")
+        for gate in self.gates:
+            #ax.plot(wp_x, wp_y, 'ro', zs=wp_z, label="Waypoints")
+            gate.plot3d(ax)
+        ax.legend()
 
     def show(self):
-        self._plot_trajectory(wp_lat, wp_lon, wp_alt)
-        self._plot_trajectory_2D(self.lat, self.lon, wp_lat, wp_lon)
+        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
+        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
         self._plot_input()
         plt.show()
 

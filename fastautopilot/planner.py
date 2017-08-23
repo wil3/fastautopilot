@@ -9,6 +9,9 @@ import threading
 from collections import deque
 
 from sim.gazebo.gazeboapi import GazeboAPI 
+import abc 
+
+from track import straight_line_track, SimplePointGate
 
 def init_logging():
     log_config = os.path.join(".", "../conf/logging.yaml")
@@ -21,6 +24,7 @@ def init_logging():
 
 logger = logging.getLogger('fastautopilot')
 
+
 class ControlInput(object):
     def __init__(self, roll, pitch, yaw, thrust):
         """ Each parameter is an array of tuples (boot_ms, data_value)
@@ -32,7 +36,7 @@ class ControlInput(object):
         self.yaw = yaw
         self.thrust = thrust
 
-class GuidedPX4Quadrotor(Vehicle):
+class PX4Quadrotor(Vehicle):
     """
     Copter is contolled using SET_POSITION_TARGET_LOCAL_NED and SET_ATTITUDE_TARGET 
 
@@ -41,47 +45,53 @@ class GuidedPX4Quadrotor(Vehicle):
     For offboard,
     http://discuss.px4.io/t/offboard-automatic-takeoff-landing-using-mav-cmd-land-takeoff-local/1333/3
 
-    MUST PUBLISH FASTER THAN  2HZ TO STAY IN OFFBOARD
-    https://dev.px4.io/en/ros/mavros_offboard.html
+    If we are not always sending target location message it switches to RTL
+
     """
 
-    START_TIME = 0
-    END_TIME = 0
-
-    PT_R = 1.0
-    SAMPLE_RATE = 10 
+    """ Rate to check if waypoint is hit in hertz """
     SET_PT_RATE = 20
 
     INIT_ALTITUDE = -2
 
+    """
+    MUST PUBLISH FASTER THAN  2HZ TO STAY IN OFFBOARD
+    https://dev.px4.io/en/ros/mavros_offboard.html """
+    OFFBOARD_MODE_RATE = 4
+
     def __init__(self, *args):
-        super(GuidedPX4Quadrotor, self).__init__(*args)
+        super(PX4Quadrotor, self).__init__(*args)
 
         # Track the trajectory
         self.flight_trajectory = []
         # Track the inputs
         self.flight_attitudes = []
-        # The waypoint locations
-        self.wp_loc = []
 
         self.current_time = None
 
-        self.local_position_ned = None
+        self.time_start = None
+
+        self.time_lap = None
 
         self.threads = []
 
+        """ Current mode to detect when we change """
         self.curr_mode = None
-
-        self.target_pos = []
 
         self.running = False
 
         self.race_end = False
 
-        self.record= False
+        self.record = False
 
+
+        """ The track the MAV will fly """
+        self.track = None
+
+        """ Save to check for transitions, i.e., takeoff or land """
         self.curr_land_state = None
 
+        """ Instance of FlightData """
         self.fight_data = None
 
         """
@@ -95,20 +105,7 @@ class GuidedPX4Quadrotor(Vehicle):
 
         @self.on_message('ATTITUDE_TARGET')
         def attitude_target_listener(self, name, target):
-            #global time_boot 
-
-
-            """
-            if (len(roll) > 0 and roll[-1] == target.body_roll_rate and
-                len(pitch) > 0 and pitch[-1] == target.body_pitch_rate and
-                len(yaw) > 0 and yaw[-1] == target.body_yaw_rate and
-                len(thrust) > 0 and thrust[-1] == target.thrust):
-                return
-            """
-
             if self.armed and self.record:
-                #if time_boot < 0:
-                #    time_boot = target.time_boot_ms
                 self.flight_attitudes.append(target)
 
         @self.on_message('EXTENDED_SYS_STATE')
@@ -125,6 +122,7 @@ class GuidedPX4Quadrotor(Vehicle):
             state.landed_state == mavutil.mavlink.MAV_LANDED_STATE_IN_AIR):
                 print "RACE BEGIN!"
                 self.record = True
+                self.time_start = self.current_time
 
             self.curr_land_state = state.landed_state
 
@@ -132,13 +130,15 @@ class GuidedPX4Quadrotor(Vehicle):
         def local_position_ned_listener(self, name, data):
             #print data
             #pass
-            self.local_position_ned = data
             self.flight_trajectory.append(data)
 
-    def keep_in_offboard_mode(self, rate):
+
+    # FIXME I think actual commands need to be sent, not this 
+    # one to keep in offboard mode, for safety
+    def keep_in_offboard_mode(self):
         while self.running:
             self._master.set_mode_px4('OFFBOARD', None, None)
-            time.sleep(1/float(rate))
+            time.sleep(1/float(self.OFFBOARD_MODE_RATE))
             if not(self.mode == self.curr_mode):
                 print "Changed modes ",self.mode
                 self.curr_mode = self.mode
@@ -160,7 +160,7 @@ class GuidedPX4Quadrotor(Vehicle):
             0, #self._master.target_system,
             0, #self._master.target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED, #Positions are relative to the vehicles home position
-            0b0000111111111000,
+            0b0000111111111000, # only position
             x, y, z, # x y z in m
             0, 0, 0, # vx, vy, vz
             0, 0, 0, # afx, afy, afz
@@ -187,29 +187,14 @@ class GuidedPX4Quadrotor(Vehicle):
 
     def start_sim_time_callback(self, sim_time):
         print "Start Sim Time", sim_time.sec
-        START_TIME = sim_time.sec
         
     def end_sim_time_callback(self, sim_time):
         print "End Sim Time", sim_time.sec
-        END_TIME = sim_time.sec
-        print "Lapse time ", END_TIME - START_TIME
 
     def arm(self):
         self.armed = True 
         while not self.armed:      
                 time.sleep(0.5)
-
-
-    def _d(self, pt1, pt2):
-        """
-        Return distance between two points
-        """
-        a = np.array(pt1)
-        b = np.array(pt2)
-        d = np.linalg.norm(a-b)
-        return d
-
-
 
     def _sleep(self, start, rate):
         """
@@ -222,39 +207,67 @@ class GuidedPX4Quadrotor(Vehicle):
             time.sleep(T - lapse)
 
 
+    def control_inputs(self):
+        if self.armed:
+            logger.warn("Can't obtain control inputs while armed")
+            return
+        return self.flight_data.control_inputs()
+            
+    def diagnostics(self):
+        if self.armed:
+            logger.warn("Can't generate diagnostics while armed")
+            return
+        if self.flight_data:
+            self.flight_data.show()
+
+class EvolvedQuadrotor(PX4Quadrotor):
+
+    def __init__(self, *args):
+        super(EvolvedQuadrotor, self).__init__(*args)
+
+class GuidedPX4Quadrotor(PX4Quadrotor):
+
+    def __init__(self, *args):
+        super(GuidedPX4Quadrotor, self).__init__(*args)
 
     def waypoint_reached_callback(self, number, pt):
         print "Waypoint reached ", pt
         if number == 0: # First waypoint reached, ie has taken off
             #self.record = True #Start recording
             pass
-        elif number == (len(self.waypoints()) -2):
+        #elif number == (len(self.waypoints()) -2):
+        elif number == len(self.track.gates)-1:
             print "Race stopped"
             self.record = False 
             self.race_end = True
+            self.lap_time = self.current_time - self.time_start
 
-    def mission_loop(self, callback=None):
-        # Way points are local and relative
-        wp = self.waypoints()
-        count = 0
-        while self.running and wp:
-            set_pt = wp.popleft()
-            print "Next set point ", set_pt
-            self.set_point(set_pt)
-            if callback:
-                callback(count, set_pt)
-            count += 1 
 
-        print "All waypoints reached"
-
+    def land(self):
         #Land
         # TODO Why does this trigger land? Bit mask not set
         # maybe due to altitude
-        land_pt = [self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, -1 * self.flight_trajectory[-1].z]
-        self.set_point(land_pt)
+        land_pt = SimplePointGate(self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, -1 * self.flight_trajectory[-1].z)
+        self.set_location(land_pt)
+
+    def mission_loop(self, gate_callback=None):
+        # Way points are local and relative
+        gates = self.track.gates
+        for i in range(len(gates)):
+            if not self.running:
+                break
+
+            gate = gates[i]
+            print "Next gate is at ", gate
+            self.set_location(gate)
+            if gate_callback:
+                gate_callback(i, gate)
+
+        print "All waypoints reached"
+        self.land()
 
         
-    def set_point(self, set_pt):
+    def set_location(self, gate):
         """
         Monitor the progress and set the next point 
         once reached
@@ -263,16 +276,16 @@ class GuidedPX4Quadrotor(Vehicle):
         # at the predefined rate
         while self.running:
             start = time.time() # TODO move to _d?
-            if self._d(set_pt,[self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, self.flight_trajectory[-1].z]) <= self.PT_R:
+            # TODO add more constraints
+            if gate.detected(self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, self.flight_trajectory[-1].z):
                 break
-            self.set_position_target_local_ned(set_pt[0], set_pt[1], set_pt[2])
+            self.set_position_target_local_ned(gate.x, gate.y, gate.z)
             self._sleep(start, self.SET_PT_RATE)
 
 
     def arm_and_begin(self):
 
-        print "Mode set to ", self.mode.name
-        t = threading.Thread(target=self.keep_in_offboard_mode, args=(4,))
+        t = threading.Thread(target=self.keep_in_offboard_mode)
         t.start()
         self.threads.append(t)
 
@@ -289,33 +302,8 @@ class GuidedPX4Quadrotor(Vehicle):
         self.arm()
         print "Arming complete"
 
-
-
-    def waypoints(self):
-        # Length of way points must be greater than 2!
-        #return self.wp_pentagon()
-        return self.wp_line()
-
-    def wp_line(self):
-        return deque([ 
-                [0, 0, -2], # takeoff
-                [10, 0, -2],
-                [20, 0, -2],
-        #        [30, 0, -2],
-        #        [40, 0, -2],
-        ])
-
-    def wp_pentagon(self):
-        return deque([ 
-                [0, 0, self.INIT_ALTITUDE], # takeoff
-                [10, 0, -2],
-                [15, 5, -2],
-                [10, 10,-2],
-                [0, 10, -2],
-                [-10, 10, -2],
-        ])
-
-    def fly(self):
+    def fly(self, track):
+        self.track = track
         self.set_max_horizontal_velocity(1.0)
         self.running = True
         self.arm_and_begin()
@@ -327,24 +315,14 @@ class GuidedPX4Quadrotor(Vehicle):
             t.join()
 
         print "All threads joined"
-        self.flight_data = FlightData(self.waypoints(), self.flight_trajectory, self.flight_attitudes)
-
-    def control_inputs(self):
-        if self.armed:
-            logger.warn("Can't obtain control inputs while armed")
-            return
-        return self.flight_data.control_inputs()
-            
-    def diagnostics(self):
-        if self.armed:
-            logger.warn("Can't generate diagnostics while armed")
-            return
-        if self.flight_data:
-            self.flight_data.show()
+        self.flight_data = FlightData(self.track.gates, self.flight_trajectory, self.flight_attitudes)
 
 
 
 class Evolver(object):
+    """ Radius in meters that is accepted to hit the waypoint """
+    WAYPOINT_R = 1.0
+
     def __init__(self, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
         self.px4_connect_string = "{}:{}".format(px4_host, px4_port)
 
@@ -352,20 +330,24 @@ class Evolver(object):
         
     def generate_baseline(self):
         v = connect(self.px4_connect_string, wait_ready=True, vehicle_class=GuidedPX4Quadrotor)
-        v.fly()
+
+        track = straight_line_track(num_gates = 3)
+        print track
+        v.fly(track)
         inputs = v.control_inputs()
         logger.info("Total attitude points collect={}".format(len(v.flight_attitudes)))
         logger.info("Roll={} Pitch={} Yaw={} Thrust={}".format(len(inputs.roll), len(inputs.pitch), len(inputs.yaw), len(inputs.thrust)))
 
-        #v.diagnostics()
-        return inputs
+        v.diagnostics()
+        return (v.time_lap, inputs)
 
 
     def _model_reset_callback(self):
         logger.info("Model reset")
 
     def evolve(self):
-        baseline_inputs = self.generate_baseline()
+        t, baseline_inputs = self.generate_baseline()
+        logger.info("Lap Time={}".format(t))
         self.gz.reset_model(self._model_reset_callback)
 
 
@@ -379,3 +361,6 @@ if __name__ == "__main__":
     init_logging()
     e = Evolver()
     e.evolve()
+
+
+
