@@ -22,6 +22,14 @@ class MyFuncAnimation(animation.FuncAnimation):
             if a in bg_cache: # this is the previously missing line
                 a.figure.canvas.restore_region(bg_cache[a])
 
+class ControlInputs(object):
+    def __init__(self, t, roll, pitch, yaw, thrust):
+        self.t = t
+        self.roll = roll
+        self.pitch = pitch
+        self.yaw = yaw
+        self.thrust = thrust
+
 class FlightData(object):
 
     def __init__(self):
@@ -37,29 +45,46 @@ class FlightData(object):
 
     def _split_trajectory_data(self, data):
         for loc in data:
-            self.lat.append(loc.lat)
-            self.lon.append(loc.lon)
-            self.alt.append(loc.alt)
+            (x, y, z) = self.NEDtoENUBodyFrame(loc.x, loc.y, loc.z)
+            self.lat.append(x)
+            self.lon.append(y)
+            self.alt.append(z)
 
+    def NEDtoENUBodyFrame(self, x, y, z):
+        return (x, -y, -z)
 
     def _split_waypoint_data(self, data):
         lat = []
         lon = []
         alt = []
         for wp in data:
-            lat.append(wp.lat)
-            lon.append(wp.lon)
-            alt.append(wp.alt)
+            #Convert back to ENU
+            (x, y, z) = self.NEDtoENUBodyFrame(wp[0], wp[1], wp[2])
+
+            lat.append(x)
+            lon.append(y)
+            alt.append(z)
         return (lat, lon, alt)
 
 
     def _split_input_data(self, data):
+        """
+        return tuple of time and AETR values
+        """
+        t = []
+        aileron = []
+        elevator = []
+        rudder = []
+        throttle = []
+
         for input in data:
             self.roll.append(input.body_roll_rate)
             self.pitch.append(input.body_pitch_rate)
             self.yaw.append(input.body_yaw_rate)
             self.thrust.append(input.thrust)
             self.t.append(input.time_boot_ms)
+
+        return (t, aileron, elevator, throttle, rudder)
 
 
 
@@ -68,9 +93,29 @@ class FlightData(object):
         (wp_lat, wp_lon, wp_alt) = self._split_waypoint_data(wp)
         self._plot_trajectory(wp_lat, wp_lon, wp_alt)
 
+        self._plot_trajectory_2D(self.lat, self.lon, wp_lat, wp_lon)
+
     def inputs(self, data):
         self._split_input_data(data)
         self._plot_input()
+
+    def identify_control_points(self, t, input):
+        """ 
+        Condense inputs to only those that matter, i.e., when a change
+        actually occurs
+        """
+        pts = []
+        pts.append( (t[0], input[0]) )
+        prev = input[0]
+        for i in range(1, len(input)):
+            # If we changed since the last input then 
+            if prev != input[i]:
+                pts.append( (t[i], input[i]) )
+            prev = input[i]
+
+        return pts
+            
+
 
     def _plot_input(self):
 #        fig = plt.figure()
@@ -98,15 +143,25 @@ class FlightData(object):
         plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
 
 
+    def _plot_trajectory_2D(self, x, y, wp_x, wp_y):
+        f, (ax1) = plt.subplots(1)
+        ax1.set_ylabel("Y (m)")
+        ax1.set_xlabel("X (m)")
+        ax1.plot(x, y, label="Flight path")
+        ax1.plot(wp_x, wp_y, 'ro', label="Waypoints")
+        ax1.set_title("Birds Eye View of Flight Path")
+        ax1.legend()
+
     def _plot_trajectory(self, wp_lat, wp_lon, wp_alt):
         print wp_lat
         print wp_lon
         print wp_alt
         fig = plt.figure()
+
         ax = fig.add_subplot(111, projection='3d')
-        ax.set_xlabel("Latitude")
-        ax.set_ylabel("Longitude")
-        ax.set_zlabel("Altitude")
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_zlabel("Z (m)")
         ax.set_xlim3d([min(self.lat), max(self.lat)])
         ax.set_ylim3d([min(self.lon), max(self.lon)])
         ax.set_zlim3d([min(self.alt), max(self.alt)])
