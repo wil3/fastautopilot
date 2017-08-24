@@ -1,20 +1,29 @@
 import abc 
 import numpy as np
 import matplotlib.pyplot as plt
+from collections import deque
 
-class WayPoint(object):
+class Gate(object):
     """ A waypoint defines how a MAV must fly through it """
     def __init__(self):
-        pass
+
+        """ Best time this gate has had """
+        self.time_best = float('inf')
 
     @abc.abstractmethod
     def detected(self, x, y, z):  
-        """ """
+        """ True if detected this given 3D point is passed the gate """
 
     @abc.abstractmethod
-    def plot(self, ax):
-        """ """
-class SimplePointGate(WayPoint):
+    def plot2d(self, ax):
+        """ How the gate should be plotted in 2d """
+
+    @abc.abstractmethod
+    def plot3d(self, ax):
+        """ How the gate should be plotted in 3d """
+
+
+class SimplePointGate(Gate):
     def __init__(self, x, y, z, radius=0):
         super(SimplePointGate, self).__init__()
         self.x = x
@@ -23,6 +32,7 @@ class SimplePointGate(WayPoint):
         self.radius = radius
 
         (self.enu_x , self.enu_y, self.enu_z) = self.NEDtoENUBodyFrame(self.x, self.y, self.z)
+
     def detected(self, x, y, z):  
         return (self._d([self.x, self.y, self.z], [x, y, z]) <= self.radius/2.0)
 
@@ -57,7 +67,7 @@ class SimplePointGate(WayPoint):
         return (x, -y, -z)
 
     def __str__(self):
-        return "x={}, y={}, z={}".format(self.x, self.y, self.z)
+        return "x={}, y={}, z={} Best={}".format(self.x, self.y, self.z, self.time_best)
 
     def __repr__(self):
         return self.__str__()
@@ -69,10 +79,15 @@ class Track:
         if gates:
             self.gates = gates
         else:
-            self.gates = []
+            self.gates = [] 
+
+        self.time_best = None
+
+        self.gate_count = len(gates)
 
     def add_gate(self, gate):
         self.gates.append(gate)
+        self.gate_count(len(gates))
 
     def __str__(self):
         return str(self.gates)
@@ -82,7 +97,7 @@ class Track:
 
 
 def straight_line_track(num_gates = 1, gate_spacing = 5, altitude = -5):
-    gates = []
+    gates =  [] 
     for i in range(num_gates):
         gates.append(SimplePointGate(i*gate_spacing, 0, altitude, radius = 1))
     return Track(gates)

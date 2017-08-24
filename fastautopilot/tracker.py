@@ -6,6 +6,9 @@ import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 import mpl_toolkits.mplot3d.axes3d as p3
 
+from label_lines import *
+
+
 class MyFuncAnimation(animation.FuncAnimation):
     """
     Unfortunately, it seems that the _blit_clear method of the Animation
@@ -36,25 +39,34 @@ class ControlInput(object):
 class FlightData(object):
 
     def __init__(self, gates, raw_position_data, raw_attitude_data):
+        """ Sequence of inputs to plot """
 
-
-        self.gates = gates
-        (self.t, self.roll, self.pitch, self.yaw, self.thrust) = self._split_input_data(raw_attitude_data)
-        """
         self.yaw = []
         self.thrust = []
         self.roll = []
         self.pitch = []
         self.t = []
-        """
 
-        (self.x, self.y, self.z) = self._split_trajectory_data(raw_position_data)
+        self.gates = gates
+        for data in raw_attitude_data:
+            (t, roll, pitch, yaw, thrust) = self._split_input_data(data)
+            self.t.append(t)
+            self.yaw.append(yaw)
+            self.thrust.append(thrust)
+            self.roll.append(roll)
+            self.pitch.append(pitch)
+            
 
-        #(self.wp_x, self.wp_y, self.wp_z) = self._convert_to_ENU(waypoints)
+        #(self.t, self.roll, self.pitch, self.yaw, self.thrust) = self._split_input_data(raw_attitude_data)
 
-        self.lat = []
-        self.lon = [] 
-        self.alt = []
+        self.x = []
+        self.y = []
+        self.z = []
+        for data in raw_position_data:
+            (x, y, z) = self._split_trajectory_data(data)
+            self.x.append(x)
+            self.y.append(y)
+            self.z.append(z)
 
 
     def NEDtoENUBodyFrame(self, x, y, z):
@@ -139,22 +151,38 @@ class FlightData(object):
         f, (ax1, ax2, ax3, ax4) = plt.subplots(4, sharex=True, sharey=True)
         #ax1 = fig.add_subplot(2,1,1)#plt.subplots()
         #ax1.set_xlabel("Time")
-        ax1.set_ylabel("Thrust")
         #ax1.set_ylim([0, 1.2])
-        ax1.plot(self.t, self.thrust)
-        ax1.plot(self.t[1:], np.diff(self.thrust), 'r--')
+	c = ['r', 'k']
+        for i in range(len(self.thrust)):
+            ax1.plot(self.t[i], self.thrust[i], c[i])
+        #ax1.plot(self.t[1:], np.diff(self.thrust), 'r--')
+        ax1.set_ylabel("Thrust")
+	labelLines(ax1.get_lines(),zorder=2.5)
 
-        ax2.plot(self.t, self.pitch)
+
+        for i in range(len(self.pitch)):
+            ax2.plot(self.t[i], self.pitch[i], c[i])
         ax2.set_ylabel("Pitch")
+	labelLines(ax2.get_lines(),zorder=2.5)
+
 
         #ax2 = fig.add_subplot(2,1,2)#plt.subplots()
-        #ax2.set_xlabel("Time")
-        ax3.set_ylabel("Yaw")
         #ax1.set_ylim([0, 1.2])
-        ax3.plot(self.t, self.yaw)
 
-        ax4.plot(self.t, self.roll)
+        
+        for i in range(len(self.yaw)):
+            ax3.plot(self.t[i], self.yaw[i], c[i])
+        ax3.set_ylabel("Yaw")
+	labelLines(ax3.get_lines(),zorder=2.5)
+
+
+        for i in range(len(self.roll)):
+            ax4.plot(self.t[i], self.roll[i], c[i])
         ax4.set_ylabel("Roll")
+	labelLines(ax4.get_lines(),zorder=2.5)
+
+
+
         ax4.set_xlabel("Time")
 
         plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
@@ -191,8 +219,8 @@ class FlightData(object):
         ax.legend()
 
     def show(self):
-        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
-        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
+#        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
+#        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
         self._plot_input()
         plt.show()
 

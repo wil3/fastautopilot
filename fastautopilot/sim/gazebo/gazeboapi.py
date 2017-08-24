@@ -97,16 +97,16 @@ class GazeboAPI:
 
     def reset_model(self, callback):
         #self.reset_model_callback = callback
-        loop = trollius.get_event_loop()
+        loop = asyncio.get_event_loop()
+        print "Is closed? ", loop.is_closed()
         #future = asyncio.Future()
         #asyncio.ensure_future(self._reset_model(future))
         #loop.run_until_complete(future)
         #print(future.result())
 
         loop.run_until_complete(self._reset_model())
+        #loop.close()
         callback()
-        loop.close()
-
 
 @trollius.coroutine
 def _publish_loop():
