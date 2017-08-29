@@ -12,6 +12,14 @@ from sim.gazebo.gazeboapi import GazeboAPI
 import abc 
 
 from track import straight_line_track, SimplePointGate
+from pyulog.core import ULog
+
+import glob
+
+from deap import algorithms
+from deap import base
+from deap import creator
+from deap import tools
 
 def init_logging():
     log_config = os.path.join(".", "../conf/logging.yaml")
@@ -23,6 +31,7 @@ def init_logging():
         raise Exception("Cannot find log configuration file")
 
 logger = logging.getLogger('fastautopilot')
+loggerPX4 = logging.getLogger('PX4')
 
 
 class ControlInput(object):
@@ -79,8 +88,11 @@ class PX4Quadrotor(Vehicle):
 
         self.current_time = None
 
+        self.start_position = None
 
+        self.time_since_takeoff = None
 
+        self.time_takeoff = None
         
         self.time_since_armed = None
 
@@ -122,28 +134,63 @@ class PX4Quadrotor(Vehicle):
 
         self.gate_times = []
 
+        """ Normalized off first sample """
+        self.time_last_attitude_sample = None
+        self.time_first_sample = None
+
         """
         Each message is sent at a certain rate as defined in configure_stream
         src/modules/mavlink/mavlink_main.cpp
         """
 
+        @self.on_message('STATUSTEXT')
+        def statustext_listener(self, name,text):
+            
+            # TODO map severity to python logger levels
+            loggerPX4.info(text)
         @self.on_message('SYSTEM_TIME')
         def system_time_listener(self, name, t):
             self.current_time = t.time_unix_usec
             self.time_boot_ms = t.time_boot_ms
-
             if self.armed and not self.time_armed:
                 self.time_armed = t.time_boot_ms
+                self.info("Armed at {}".format(self.time_armed))
 
             if self.armed and self.time_armed:
                 self.time_since_armed = self.time_boot_ms - self.time_armed 
 
+            if self.time_takeoff:
+                self.time_since_takeoff = t.time_boot_ms - self.time_takeoff
+
+            #if self.time_first_sample:
+            #    self.time_since_first_sample
+
         @self.on_message('ATTITUDE_TARGET')
         def attitude_target_listener(self, name, target):
-            if self.armed and self.time_since_armed:# and self.record:
-                target.time_boot_ms = self.time_since_armed
-                self.flight_attitudes.append(target)
-                
+            #sys.stdout.write('.')
+
+            #print "{} {}".format(target.time_boot_ms, target.thrust)
+            #if self.armed and self.time_since_armed:# and self.record:
+            #target.time_boot_ms = self.time_since_armed
+
+            if not self.time_first_sample:
+                print "first sample!"
+                self.time_first_sample = target.time_boot_ms
+
+            #if self.time_takeoff:
+            self.time_last_attitude_sample = target.time_boot_ms - self.time_first_sample
+            target.time_boot_ms = self.time_last_attitude_sample 
+            #self.flight_attitudes.append(target)
+            #self.log_att(target)
+            #print target
+
+
+
+        """
+        @self.on_message('SET_ATTITUDE_TARGET')                
+        def set_attitude_target_listener(self, name, att):
+            print att
+        """
 
         @self.on_message('EXTENDED_SYS_STATE')
         def landed_state_listener(self, name, state):
@@ -165,19 +212,26 @@ class PX4Quadrotor(Vehicle):
 
         @self.on_message('LOCAL_POSITION_NED')
         def local_position_ned_listener(self, name, data):
-            #print data
+            #print "Z=", data.z 
             #pass
+            if not self.start_position:
+                self.start_position = data 
+            #abs(self.start_position.z - data.z)
+            if not self.time_takeoff and  data.z < -0.1 and self.armed:
+                self.info("TAKE OFF DETECTED! {} {} {}".format(self.time_takeoff, self.start_position.z, data.z))
+                self.time_takeoff = data.time_boot_ms
+
             self.flight_trajectory.append(data)
 
             # TODO move to gate?
             if self.track:
                 
                 if (self.track.gate_count > self.gate_next and
-               self.track.gates[self.gate_next].detected(data.x, data.y, data.z)):
+                    self.track.gates[self.gate_next].detected(data.x, data.y, data.z)):
 
-                    gate_time = self.time_since_armed
+                    gate_time = data.time_boot_ms - self.time_takeoff#self.time_first_sample#self.time_since_armed
 
-                    self.info("Gate {} reached at {}".format(self.gate_next, self.time_since_armed))
+                    self.info("Gate {} reached at {}".format(self.gate_next, gate_time))#self.time_since_armed))
                    
                     self.gate_times.append(gate_time)
 
@@ -187,6 +241,9 @@ class PX4Quadrotor(Vehicle):
                     self.gate_next += 1 
                 
 
+
+    def log_att(self, att):
+        self.info("roll={:0.2f} pitch={:0.2f} yaw={:0.2f} thrust={:0.2f}".format(att.body_roll_rate, att.body_pitch_rate, att.body_yaw_rate, att.thrust))
     # FIXME I think actual commands need to be sent, not this 
     # one to keep in offboard mode, for safety
     def keep_in_offboard_mode(self):
@@ -252,12 +309,12 @@ class PX4Quadrotor(Vehicle):
     def arm(self):
         self.armed = True 
         """ Block until the time is set becaues everything is based off this """
-        while not self.armed and not self.time_since_armed:      
+        while not self.armed:# and not self.time_since_armed:      
                 time.sleep(0.1)
 
 
     def info(self, message):
-        logger.info("[{}]\t{}".format(self.time_since_armed, message))
+        logger.info("[{}]\t{}".format(self.time_last_attitude_sample, message))
 
     def _sleep(self, start, rate):
         """
@@ -297,7 +354,7 @@ class EvolvedQuadrotor(PX4Quadrotor):
         self.running = True
         self.set_max_horizontal_velocity(30.0)
 
-        t = threading.Thread(target=self.autopilot)#, args=(self.waypoint_reached_callback,))
+        t = threading.Thread(target=self.controller)#, args=(self.waypoint_reached_callback,))
         t.start()
         self.threads.append(t)
 
@@ -307,6 +364,7 @@ class EvolvedQuadrotor(PX4Quadrotor):
             self.info("Waiting for mode change, current mode={}".format(self.mode.name))
             time.sleep(1)
 
+        self.info("Mode={}".format(self.mode.name))
         self.info("Arming...")
         self.arm()
         self.info("Arm complete")
@@ -320,46 +378,58 @@ class EvolvedQuadrotor(PX4Quadrotor):
             t.join()
 
     def set_attitude_target(self, att, mask=0b00000000): 
+        # According to modules/mavlink/mavlink_receiver.cpp
+        # when this message is received the attitude bit is first
+        # checked. If it is set quaternion is converted to euler
+        # with mavlink_quaternion_to_euler and then published to orb as the
+        # vehicle_attitude_setpoint topic
+
+        #self.info("Setting thrust {}".format(att.thrust))
         self._master.mav.set_attitude_target_send(
-            0, 
-            0, 
-            0,
+            0, # time 
+            0, # target_system
+            0, # target_component
             mask, 
-            att.q,
+            att.q,#[0,0,0,0], # att.q,IGNORE ATTITUTDE
             att.body_roll_rate,
             att.body_pitch_rate,
             att.body_yaw_rate,
             att.thrust
         )
 
-    def autopilot(self):
-        """
-        roll = deque(self.input.roll)
-        pitch = deque(self.input.pitch)
-        yaw = deque(self.input.yaw)
-        thrust = deque(self.input.thrust)
-        """
+    def time_ms(self):
+        return time.time() * 1000.0
+
+    def controller(self):
+        self.info("Thread started")
+        (t, roll, pitch, yaw, thrust) = split_input_data(self.input)
+        intervals_ms = np.diff(t)
+
         attitudes = deque(self.input)
-        
+
+        # Init
         curr_attitude = attitudes.popleft()
-        next_attitude = attitudes.popleft()
-        self.info("First attitude {}".format(curr_attitude))
+        command_index = 0
+        command_send_time =  intervals_ms[command_index]
+        command_time_start = self.time_ms()
 
         while self.running:
-
-            if self.armed:
-                if  attitudes and next_attitude.time_boot_ms <= self.time_since_armed:
-                    #self.info("Setting attitude at t={} {}".format(normal, next_attitude))
-                    curr_attitude = next_attitude
-                    next_attitude = attitudes.popleft()
-
-                self.set_attitude_target(curr_attitude)
-
-            else:
+            if not self.armed:
                 # Keep in OFFBOARD mode
-                self.set_attitude_target(next_attitude, 0b11111111)
+                self.set_attitude_target(curr_attitude, 0b11111111)
+                continue
 
-            
+            dt = self.time_ms() - command_time_start
+            if  attitudes and dt >= command_send_time:
+                curr_attitude = attitudes.popleft()
+                #print "Current thrust=", curr_attitude.thrust
+                command_send_time = intervals_ms[command_index]
+                command_time_start = self.time_ms()
+                command_index += 1
+
+            self.set_attitude_target(curr_attitude)
+
+        self.info("Set {} commands".format(command_index))
 
 
 class GuidedPX4Quadrotor(PX4Quadrotor):
@@ -475,16 +545,129 @@ class Evolver(object):
 
         self.gz = GazeboAPI(gazebo_host, gazebo_port)
 
+        self.flight_data = []
         self.flight_data_attitudes = []
         self.flight_data_paths = []
 
-        self.track = straight_line_track(num_gates = 1, altitude = -2)
+        self.track = straight_line_track(num_gates = 2, altitude = -2)
+
+        self.gate_times = []
         logger.info("Race track: {}".format(self.track))
         
         self.racing = False
 
-    def race(self, vehicle_class, input=None):
-        v = connect(self.px4_connect_string, wait_ready=True, vehicle_class=vehicle_class)
+
+
+    def init_search(self):
+	# The weights tuple depends on what is returned in the evaluation function
+        # We will want to minimize the time
+	creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+        creator.create("Individual", list, fitness=creator.FitnessMin)
+
+        self.toolbox = base.Toolbox()
+        # Attribute generator
+        self.toolbox.register("attr_item", self.get_random_char)
+
+        self.toolbox.register("word", self.gen_filter, self.MIN_LENGTH, self.MAX_LENGTH)
+        # Structure initializers
+        self.toolbox.register("individual", tools.initIterate, creator.Individual, self.toolbox.word)
+        self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
+        # Operator registering
+        self.toolbox.register("evaluate",self.eval)
+        self.toolbox.register("mate", self.mate)
+        self.toolbox.register("mutate",self.mut)
+        self.toolbox.register("addFilter", self.mutAddFilter)
+        self.toolbox.register("delFilter", self.mutDelFilter)
+        self.toolbox.register("select",tools.selBest )
+
+    def _model_reset_callback(self):
+        logger.info("Model reset")
+
+
+    def _has_fastest_time(self, vehicle):
+        """ At anytime we just want to take a snapshot and see if they are going faster. Two cases, drone made it to the gate but not faster, drone still hasnt made it to the gate (we missed a sample) """
+        is_fastest = True
+
+        """
+        if (len(vehicle.gate_times) == 0 and
+            vehicle.time_last_attitude_sample > vehicle.track.gates[0].time_best):
+            is_fastest = False
+        else:
+        """
+        #print "V gate times ", vehicle.gate_times, " Best ", vehicle.track.gates
+
+        number_gate_times = len(vehicle.gate_times)
+        if number_gate_times < vehicle.track.gate_count: # Havnt hit all gates
+            last_gate_best_time = vehicle.track.gates[number_gate_times].time_best
+            #print "\tLast sample time ", vehicle.time_last_attitude_sample 
+            #time_last_attitude_sample
+            if vehicle.time_since_takeoff > last_gate_best_time:
+                is_fastest = False
+
+        else:
+            for i in range(vehicle.track.gate_count):
+                if vehicle.gate_times[i] > vehicle.track.gates[i].time_best:
+                    is_fastest = False
+                    break;
+        return is_fastest
+
+    def race_timeout(self, vehicle):
+        logger.info("Waiting for race timeout")
+        end = False
+        while True:#self.racing:
+            if vehicle.track:
+                    #(vehicle.track.gate_count > vehicle.gate_next and # There are still gates left
+                    #vehicle.time_since_armed  > vehicle.track.gates[vehicle.gate_next].time_best) 
+                if not self._has_fastest_time(vehicle):
+                    logger.info("Didnt beat best times of {} with times {} ".format(vehicle.track.gates, vehicle.gate_times))
+                    end = True
+
+                elif (vehicle.track.gate_count == vehicle.gate_next): #completed
+                    logger.info("Completed all gates {} {}".format(vehicle.track.gate_count,vehicle.gate_next))
+                    end = True
+
+                if end:
+                    vehicle.running = False #stop all threads
+                    vehicle.armed = False
+                    #vehicle.close()
+                    break
+            time.sleep(1)
+            #logger.info("Everything ok t={} {} {}".format(vehicle.time_since_takeoff, vehicle.track.gates, vehicle.gate_times))
+
+        self.racing = False
+        logger.info("outside loop")
+
+    def run(self):
+        t, baseline_attitudes = self.race("baseline", GuidedPX4Quadrotor)
+        logger.info("Lap Time={}".format(t))
+
+        logged_att_sp = self.parse_log()
+        #self.flight_data_attitudes.append(logged_att_sp)
+        self.flight_data.append(FlightData("logged-baseline", None, None, logged_att_sp))
+
+        logger.info("EVOLVING")
+        t2, evolved_attitues = self.race("e1", EvolvedQuadrotor, input=logged_att_sp)
+
+        logged_att_sp = self.parse_log()
+        self.flight_data.append(FlightData("logged-e1", None, None, logged_att_sp))
+
+        
+        #print "Len: ", len(self.flight_data_attitudes)
+        #data = FlightAnalysis(self.gate_times, self.track.gates, self.flight_data_paths, self.flight_data_attitudes)
+        data = FlightAnalysis()
+        
+        data.plot_input(self.flight_data)
+        
+        data.show()
+
+
+
+    def status_printer(self, txt):
+        #Limited to messages of 50 characters
+        loggerPX4.info(txt)
+
+    def race(self, name, vehicle_class, input=None):
+        v = connect(self.px4_connect_string, wait_ready=True, vehicle_class=vehicle_class, status_printer=None)
 
         self.racing = True
         t = threading.Thread(target=self.race_timeout, args=(v,))#, args=(self.waypoint_reached_callback,))
@@ -494,6 +677,7 @@ class Evolver(object):
         # Wait in main thread
         while self.racing:
             time.sleep(1)
+        logger.info("Joining...")
         t.join()
 
         v.close()
@@ -503,9 +687,13 @@ class Evolver(object):
         logger.info("Total attitude points collect={}".format(len(v.flight_attitudes)))
         #logger.info("Roll={} Pitch={} Yaw={} Thrust={}".format(len(inputs.roll), len(inputs.pitch), len(inputs.yaw), len(inputs.thrust)))
 
-        self.flight_data_attitudes.append(v.flight_attitudes)
-        self.flight_data_paths.append(v.flight_trajectory)
+        #data = FlightData(name, v.gate_times,v.flight_trajectory, v.flight_attitudes)
 
+        #self.flight_data_attitudes.append(v.flight_attitudes)
+        #self.flight_data_paths.append(v.flight_trajectory)
+        #self.flight_data.append(data)
+
+        self.gate_times.append(v.gate_times)
         #v.diagnostics()
 
 
@@ -516,59 +704,76 @@ class Evolver(object):
         logger.info("Race stats {}".format(self.track))
         GazeboAPI(self.gazebo_host, self.gazebo_port).reset_model(self._model_reset_callback)
 
+
         return (v.time_lap, v.flight_attitudes )
 
-    def _model_reset_callback(self):
-        logger.info("Model reset")
+
+    def get_last_log(self):
+        path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log/2017-08-29/*.ulg"
+        list_of_files = glob.glob(path)
+        return max(list_of_files, key=os.path.getctime)
 
 
-    def _has_fastest_time(self, vehicle):
-        """ At anytime we just want to take a snapshot and see if they are going faster """
-        is_fastest = True
-
-        if (len(vehicle.gate_times) == 0 and
-            vehicle.time_since_armed > vehicle.track.gates[0].time_best):
-            is_fastest = False
-        else:
-            for i in range(len(vehicle.gate_times)):
-                if vehicle.gate_times[i] > vehicle.track.gates[i].time_best:
-                    is_fastest = False
-                    break;
-        return is_fastest
-
-    def race_timeout(self, vehicle):
-        logger.info("Waiting for race timeout")
-        while True:#self.racing:
-            if (
-                vehicle.track and
-                (
-                    #(vehicle.track.gate_count > vehicle.gate_next and # There are still gates left
-                    #vehicle.time_since_armed  > vehicle.track.gates[vehicle.gate_next].time_best) 
-                    not self._has_fastest_time(vehicle)
-                    or
-                    (vehicle.track.gate_count == vehicle.gate_next)
-                )
-            ):
-                logger.info("Didnt beat best time, or race over closing")
-                vehicle.running = False #stop all threads
-                vehicle.armed = False
-                #vehicle.close()
-                break
-            time.sleep(0.1)
-
-        self.racing = False
-        logger.info("outside loop")
-
-    def run(self):
-        t, baseline_attitudes = self.race(GuidedPX4Quadrotor)
-        logger.info("Lap Time={}".format(t))
-
-        logger.info("EVOLVING")
-        t2, evolved_attitues = self.race(EvolvedQuadrotor, input=baseline_attitudes)
+    def parse_log(self):
+        """
+        Return a list of Attitude_SP
+        """
+        latest_log = self.get_last_log() 
+        logger.info("Reading log {}".format(latest_log))
         
-        data = FlightData(self.track.gates, self.flight_data_paths, self.flight_data_attitudes)
-        data.show()
+        msg_filter = ['vehicle_attitude_setpoint']
+        ulog = ULog(latest_log, msg_filter)
+        data = ulog.data_list
 
+        attitude_sp = []
+
+
+        for d in data:
+
+            # use same field order as in the log, except for the timestamp
+            # Timestamp in log is in microseconds
+            start_time = None
+            data_keys = [f.field_name for f in d.field_data]
+            for i in range(len(d.data['timestamp'])):
+                if not start_time:
+                    start_time = d.data["timestamp"][i]
+
+                #for k in range(len(data_keys)):
+                    #d.data[data_keys[k]][i]
+                """
+                att = {"time_boot_ms": d.data["timestamp"][i] - start_time, 
+                       "body_roll_rate": d.data["roll_body"][i], 
+                       "body_pitch_rate": d.data["pitch_body"][i],
+                       "body_yaw_rate": d.data["yaw_body"][i],
+                       "thrust": d.data["thrust"][i]
+                       }
+                """
+                t = (d.data["timestamp"][i] - start_time)/1000.0 #convert to milliseconds
+                attitude_sp.append(Attitude_SP(
+                                          t, 
+                                          d.data["roll_body"][i],
+                                          d.data["pitch_body"][i],
+                                          d.data["yaw_body"][i], 
+                                          d.data["thrust"][i],
+                                        [d.data["q_d[0]"][i], d.data["q_d[1]"][i], d.data["q_d[2]"][i], d.data["q_d[3]"][i]]
+                                        ))
+        return attitude_sp
+
+class Attitude_SP:
+    def __init__(self, time_boot_ms, body_roll_rate, body_pitch_rate, body_yaw_rate, thrust, q):
+        self.time_boot_ms = time_boot_ms
+        self.body_roll_rate = body_roll_rate
+        self.body_pitch_rate = body_pitch_rate
+        self.body_yaw_rate = body_yaw_rate
+        self.thrust = thrust
+        self.q = q
+
+def fitness():
+    """
+    1. time
+    2. minimize points and smoothness
+    """
+    pass
 
 if __name__ == "__main__":
     #connection_string = '127.0.0.1:14540'
@@ -580,6 +785,7 @@ if __name__ == "__main__":
     init_logging()
     e = Evolver()
     e.run()
+    #e.parse_log()
 
 
 

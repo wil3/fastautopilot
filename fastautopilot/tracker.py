@@ -9,6 +9,25 @@ import mpl_toolkits.mplot3d.axes3d as p3
 from label_lines import *
 
 
+def split_input_data(data):
+    # TODO make generic to split hash
+    """
+    return tuple of time and AETR values
+    """
+    t = []
+    roll = []
+    pitch = []
+    yaw = []
+    thrust = []
+
+    for input in data:
+        roll.append(input.body_roll_rate)
+        pitch.append(input.body_pitch_rate)
+        yaw.append(input.body_yaw_rate)
+        thrust.append(input.thrust)
+        t.append(input.time_boot_ms)
+
+    return (t, roll, pitch, yaw, thrust)
 class MyFuncAnimation(animation.FuncAnimation):
     """
     Unfortunately, it seems that the _blit_clear method of the Animation
@@ -36,11 +55,27 @@ class ControlInput(object):
         self.yaw = yaw
         self.thrust = thrust
 
-class FlightData(object):
 
-    def __init__(self, gates, raw_position_data, raw_attitude_data):
+class FlightData:
+    """
+    Data for one flight
+    """
+    def __init__(self, name, gate_times, positions, attitudes):
+        self.name = name
+        self.gate_times = gate_times
+        self.positions =  positions
+        self.attitudes = attitudes
+
+
+class FlightAnalysis(object):
+
+    def __init__(self):
+        pass
+
+    def init2(self, gate_times,  gates, raw_position_data, raw_attitude_data):
         """ Sequence of inputs to plot """
 
+        self.gate_times = gate_times
         self.yaw = []
         self.thrust = []
         self.roll = []
@@ -49,7 +84,7 @@ class FlightData(object):
 
         self.gates = gates
         for data in raw_attitude_data:
-            (t, roll, pitch, yaw, thrust) = self._split_input_data(data)
+            (t, roll, pitch, yaw, thrust) = split_input_data(data)
             self.t.append(t)
             self.yaw.append(yaw)
             self.thrust.append(thrust)
@@ -99,24 +134,6 @@ class FlightData(object):
         return (lat, lon, alt)
 
 
-    def _split_input_data(self, data):
-        """
-        return tuple of time and AETR values
-        """
-        t = []
-        roll = []
-        pitch = []
-        yaw = []
-        thrust = []
-
-        for input in data:
-            roll.append(input.body_roll_rate)
-            pitch.append(input.body_pitch_rate)
-            yaw.append(input.body_yaw_rate)
-            thrust.append(input.thrust)
-            t.append(input.time_boot_ms)
-
-        return (t, roll, pitch, yaw, thrust)
 
     def control_inputs(self):
 
@@ -146,24 +163,57 @@ class FlightData(object):
             
 
 
-    def _plot_input(self):
+    def plot_input(self, flight_data):
+
+        self.yaw = []
+        self.thrust = []
+        self.roll = []
+        self.pitch = []
+        self.t = []
+
+        names = []
+        for data in flight_data:
+            names.append(data.name)
+            (t, roll, pitch, yaw, thrust) = split_input_data(data.attitudes)
+            self.t.append(t)
+            self.yaw.append(yaw)
+            self.thrust.append(thrust)
+            self.roll.append(roll)
+            self.pitch.append(pitch)
+            
+
+
+
+
+
+
 #        fig = plt.figure()
         f, (ax1, ax2, ax3, ax4) = plt.subplots(4, sharex=True, sharey=True)
         #ax1 = fig.add_subplot(2,1,1)#plt.subplots()
         #ax1.set_xlabel("Time")
-        #ax1.set_ylim([0, 1.2])
+        min_rad = -3.14
+        max_rad = 3.14
+        ax1.set_ylim([0, 1.2])
+        ax2.set_ylim([min_rad, max_rad])
+        ax3.set_ylim([min_rad, max_rad])
+        ax4.set_ylim([min_rad, max_rad])
+
+        
 	c = ['r', 'k']
-        for i in range(len(self.thrust)):
-            ax1.plot(self.t[i], self.thrust[i], c[i])
+	c_gates = ['--r', '--k']
+        
+        for i in range(len(flight_data)):
+            ax1.plot(self.t[i], self.thrust[i], marker='.', label=names[i])
+            #ax1.vlines(self.gate_times[i], [-0.5], [2], c[i])
         #ax1.plot(self.t[1:], np.diff(self.thrust), 'r--')
         ax1.set_ylabel("Thrust")
-	labelLines(ax1.get_lines(),zorder=2.5)
+        ax1.legend()
+	#labelLines(ax1.get_lines(),zorder=2.5)
 
 
         for i in range(len(self.pitch)):
-            ax2.plot(self.t[i], self.pitch[i], c[i])
-        ax2.set_ylabel("Pitch")
-	labelLines(ax2.get_lines(),zorder=2.5)
+            ax2.plot(self.t[i], self.pitch[i], marker='.')
+        ax2.set_ylabel("Pitch Rate  (rad/s)")
 
 
         #ax2 = fig.add_subplot(2,1,2)#plt.subplots()
@@ -171,19 +221,17 @@ class FlightData(object):
 
         
         for i in range(len(self.yaw)):
-            ax3.plot(self.t[i], self.yaw[i], c[i])
-        ax3.set_ylabel("Yaw")
-	labelLines(ax3.get_lines(),zorder=2.5)
+            ax3.plot(self.t[i], self.yaw[i],  marker='.')
+        ax3.set_ylabel("Yaw Rate (rad/s)")
 
 
         for i in range(len(self.roll)):
-            ax4.plot(self.t[i], self.roll[i], c[i])
-        ax4.set_ylabel("Roll")
-	labelLines(ax4.get_lines(),zorder=2.5)
+            ax4.plot(self.t[i], self.roll[i], marker='.')
+        ax4.set_ylabel("Roll Rate (rad/s)")
 
 
 
-        ax4.set_xlabel("Time")
+        ax4.set_xlabel("Time (ms)")
 
         plt.setp([a.get_xticklabels() for a in f.axes[:-1]], visible=False)
 
@@ -221,7 +269,7 @@ class FlightData(object):
     def show(self):
 #        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
 #        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
-        self._plot_input()
+        #self._plot_input()
         plt.show()
 
 class Tracker(Process):
