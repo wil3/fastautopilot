@@ -5,10 +5,13 @@ from collections import deque
 
 class Gate(object):
     """ A waypoint defines how a MAV must fly through it """
-    def __init__(self):
+    def __init__(self, id):
 
+        self.id = id
         """ Best time this gate has had """
         self.time_best = float('inf')
+        """ Who got the best time? """
+        self.time_best_by = None
 
     @abc.abstractmethod
     def detected(self, x, y, z):  
@@ -24,8 +27,8 @@ class Gate(object):
 
 
 class SimplePointGate(Gate):
-    def __init__(self, x, y, z, radius=0):
-        super(SimplePointGate, self).__init__()
+    def __init__(self, id, x, y, z, radius=0):
+        super(SimplePointGate, self).__init__(id)
         self.x = x
         self.y = y
         self.z = z
@@ -38,7 +41,7 @@ class SimplePointGate(Gate):
 
     def _d(self, pt1, pt2):
         """
-        Return distance between two points
+        Return distance between two points in 3D
         """
         a = np.array(pt1)
         b = np.array(pt2)
@@ -67,7 +70,7 @@ class SimplePointGate(Gate):
         return (x, -y, -z)
 
     def __str__(self):
-        return "x={}, y={}, z={} Best={}".format(self.x, self.y, self.z, self.time_best)
+        return "GATE {}: Best time={} by {}".format(self.id, self.time_best, self.time_best_by)
 
     def __repr__(self):
         return self.__str__()
@@ -99,8 +102,24 @@ class Track:
 def straight_line_track(num_gates = 1, gate_spacing = 5, altitude = -5):
     gates =  [] 
     for i in range(num_gates):
-        gates.append(SimplePointGate(i*gate_spacing, 0, altitude, radius = 1))
+        name = "G{}".format(i)
+        gates.append(SimplePointGate(name, i*gate_spacing, 0, altitude, radius = 1))
     return Track(gates)
+
+def square_track(gate_spacing = 5, altitude = -2):
+
+    gates =  [] 
+    xy_pos = [
+            [0, 0],
+            [gate_spacing, 0],
+            [gate_spacing, gate_spacing],
+            [0, gate_spacing]
+    ]
+    for i in range(len(xy_pos)):
+        name = "G{}".format(i)
+        gates.append(SimplePointGate(name, xy_pos[i][0], xy_pos[i][1], altitude, radius = 1))
+    return Track(gates)
+
 """
     def waypoints(self):
         # Length of way points must be greater than 2!

@@ -98,7 +98,6 @@ class GazeboAPI:
     def reset_model(self, callback):
         #self.reset_model_callback = callback
         loop = asyncio.get_event_loop()
-        print "Is closed? ", loop.is_closed()
         #future = asyncio.Future()
         #asyncio.ensure_future(self._reset_model(future))
         #loop.run_until_complete(future)

@@ -28,6 +28,7 @@ def split_input_data(data):
         t.append(input.time_boot_ms)
 
     return (t, roll, pitch, yaw, thrust)
+
 class MyFuncAnimation(animation.FuncAnimation):
     """
     Unfortunately, it seems that the _blit_clear method of the Animation
@@ -56,21 +57,13 @@ class ControlInput(object):
         self.thrust = thrust
 
 
-class FlightData:
-    """
-    Data for one flight
-    """
-    def __init__(self, name, gate_times, positions, attitudes):
-        self.name = name
-        self.gate_times = gate_times
-        self.positions =  positions
-        self.attitudes = attitudes
 
 
 class FlightAnalysis(object):
 
-    def __init__(self):
-        pass
+    def __init__(self, gates, flightdata):
+        self.gates = gates
+        self.flightdata = flightdata
 
     def init2(self, gate_times,  gates, raw_position_data, raw_attitude_data):
         """ Sequence of inputs to plot """
@@ -174,12 +167,20 @@ class FlightAnalysis(object):
         names = []
         for data in flight_data:
             names.append(data.name)
-            (t, roll, pitch, yaw, thrust) = split_input_data(data.attitudes)
+            # FIXME Why is the first point coming before arming? That isnt supposed to happen
+            (t, roll, pitch, yaw, thrust) = split_input_data(data.attitudes[1:])
             self.t.append(t)
             self.yaw.append(yaw)
             self.thrust.append(thrust)
             self.roll.append(roll)
             self.pitch.append(pitch)
+            
+
+        #normalize time
+        for i in range(len(self.t)):
+            for j in range(1, len(self.t[i]) ):
+                self.t[i][j] = self.t[i][j] - self.t[i][0]
+            self.t[i][0] = 0.0
             
 
 
@@ -193,7 +194,6 @@ class FlightAnalysis(object):
         #ax1.set_xlabel("Time")
         min_rad = -3.14
         max_rad = 3.14
-        ax1.set_ylim([0, 1.2])
         ax2.set_ylim([min_rad, max_rad])
         ax3.set_ylim([min_rad, max_rad])
         ax4.set_ylim([min_rad, max_rad])
@@ -202,18 +202,23 @@ class FlightAnalysis(object):
 	c = ['r', 'k']
 	c_gates = ['--r', '--k']
         
+        lines_thrust = []
         for i in range(len(flight_data)):
-            ax1.plot(self.t[i], self.thrust[i], marker='.', label=names[i])
+            line, = ax1.plot(self.t[i], self.thrust[i], marker='.', label=names[i])
+            lines_thrust.append(line)
             #ax1.vlines(self.gate_times[i], [-0.5], [2], c[i])
         #ax1.plot(self.t[1:], np.diff(self.thrust), 'r--')
+        ax1.set_ylim([0, 1.0])
         ax1.set_ylabel("Thrust")
-        ax1.legend()
+        #ax1.legend()
+        plt.figlegend(lines_thrust, names, loc = 'lower center', ncol=5, labelspacing=0.)
 	#labelLines(ax1.get_lines(),zorder=2.5)
 
 
         for i in range(len(self.pitch)):
             ax2.plot(self.t[i], self.pitch[i], marker='.')
         ax2.set_ylabel("Pitch Rate  (rad/s)")
+        ax2.set_ylim([-1, 1.0])
 
 
         #ax2 = fig.add_subplot(2,1,2)#plt.subplots()
@@ -248,7 +253,15 @@ class FlightAnalysis(object):
         for gate in self.gates:
             gate.plot2d(ax1)
 
-    def _plot_trajectory(self, x, y, z):#, wp_x, wp_y, wp_z):
+    def plot_3D_path(self):#, wp_x, wp_y, wp_z):
+        paths = []
+        names = []
+        for data in self.flightdata:
+            names.append(data.name)
+            (x, y, z) = self._split_trajectory_data(data.positions)
+            paths.append((x, y, z))
+
+
         fig = plt.figure()
 
         ax = fig.add_subplot(111, projection='3d')
@@ -260,7 +273,15 @@ class FlightAnalysis(object):
 #        ax.set_zlim3d([min(z), max(z)])
         plt.ticklabel_format(style='plain', axis='both')
 
-        ax.plot(x, y, zs=z, label="Flight path")
+
+
+        i = 0
+        for (x, y, z) in paths:
+            ax.plot(x, y, zs=z, label=names[i])
+            i += 1
+
+
+
         for gate in self.gates:
             #ax.plot(wp_x, wp_y, 'ro', zs=wp_z, label="Waypoints")
             gate.plot3d(ax)
