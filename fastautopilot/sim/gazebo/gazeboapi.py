@@ -16,6 +16,9 @@ from trollius import From
 import trollius as asyncio
 
 import traceback
+
+import concurrent
+
 class GazeboAPI:
     MODEL_NAME = "iris"
     ORIGIN_TOL = 0.1
@@ -69,6 +72,12 @@ class GazeboAPI:
         else:
             return False
 
+
+    def close_connection(self):
+        for conn in self.pose_info_subscriber._connections:
+            print "Closing connection"
+            conn.socket.close()
+
     def _reset_callback(self, data):
         msg = pygazebo.msg.poses_stamped_pb2.PosesStamped()
         msg.ParseFromString(data)
@@ -76,20 +85,45 @@ class GazeboAPI:
             if pose.name == self.MODEL_NAME:
                 if self._at_origin(pose):
                     self.waiting_for_message = False
+                    #print "Model reset!"
                 break
 
     def _reset_model(self):#, future):
         
         #start listening for the event
+        #print "connect"
         manager = yield From(pygazebo.connect((self.host, self.port)))
+        #print "pub init"
         publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
+        #print "sub init"
         self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
         world = self._world_reset_message()
         self.waiting_for_message = True
+
+        publish_interval = 1 # publish at this interval
+        poll_interval = 0.1 # Sleep for this long to wait for a response message
+        last_time = 0
         while self.waiting_for_message: 
-            yield From(publisher.publish(world))
+
+            #print "sleep"
+            yield From(trollius.sleep(poll_interval))
+            #print "pub"
+            dt = time.time() - last_time
+            if dt > publish_interval: 
+                yield From(publisher.publish(world))
+                last_time = time.time()
+            #print "wait"
+            #yield From(self.pose_info_subscriber.wait_for_connection())
+
+        """
+        yield From(publisher.publish(world))
+        yield From(self.pose_info_subscriber.wait_for_connection())
+
+        while self.waiting_for_message: 
+            print "waiting"
             yield From(trollius.sleep(0.5))
-            yield From(self.pose_info_subscriber.wait_for_connection())
+
+        """
 
         #self.pose_info_subscriber.remove()
         #self.reset_model_callback()
@@ -97,14 +131,24 @@ class GazeboAPI:
 
     def reset_model(self, callback):
         #self.reset_model_callback = callback
-        loop = asyncio.get_event_loop()
+        self.loop = asyncio.get_event_loop()
         #future = asyncio.Future()
         #asyncio.ensure_future(self._reset_model(future))
         #loop.run_until_complete(future)
         #print(future.result())
 
-        loop.run_until_complete(self._reset_model())
-        #loop.close()
+        #executor = concurrent.futures.ThreadPoolExecutor(5)
+        #loop.set_default_executor(executor)
+
+
+        self.loop.run_until_complete(self._reset_model())
+        print "Loop complete, closing connection"
+        # This causes Bad file descriptor'
+        self.close_connection()
+        #executor.shutdown(wait=True)
+
+        #Closing the event  causes an exception to be raised, this is irriversible do not do this!
+        #self.loop.close()
         callback()
 
 @trollius.coroutine

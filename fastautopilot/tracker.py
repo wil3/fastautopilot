@@ -177,10 +177,12 @@ class FlightAnalysis(object):
             
 
         #normalize time
+        """
         for i in range(len(self.t)):
             for j in range(1, len(self.t[i]) ):
                 self.t[i][j] = self.t[i][j] - self.t[i][0]
             self.t[i][0] = 0.0
+        """
             
 
 

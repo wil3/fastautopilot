@@ -26,15 +26,15 @@ from deap import base
 from deap import creator
 from deap import tools
 
+#ROLL = 1
+#PITCH = 2
+#YAW = 3
 DT = 0
-ROLL = 1
-PITCH = 2
-YAW = 3
-THRUST = 4
-Q0 = 5
-Q1 = 6
-Q2 = 7
-Q3 = 8
+THRUST = 1
+Q0 =2 
+Q1 =3
+Q2 =4
+Q3 =5
 
 def init_logging():
     log_config = os.path.join(".", "../conf/logging.yaml")
@@ -201,7 +201,8 @@ class QuadrotorPX4(Vehicle):
 
         @self.on_message('HEARTBEAT')
         def heartbeat(self, name, beat):
-            self.info("HEARTBEAT")
+            #self.info("HEARTBEAT")
+            pass
         @self.on_message('ATTITUDE')
         def attitude_listener(self, name, attitude):
             #print attitude
@@ -359,11 +360,6 @@ class QuadrotorPX4(Vehicle):
             0, 0
         )
 
-    def start_sim_time_callback(self, sim_time):
-        print "Start Sim Time", sim_time.sec
-        
-    def end_sim_time_callback(self, sim_time):
-        print "End Sim Time", sim_time.sec
 
     def arm(self):
         self.armed = True 
@@ -427,7 +423,7 @@ class QuadrotorEvolved(QuadrotorPX4):
         return 1/rate
 
 
-    def set_attitude_target(self, att, mask=0b00000000): 
+    def set_attitude_target(self, att, mask=0b00000111): 
         # According to modules/mavlink/mavlink_receiver.cpp
         # when this message is received the attitude bit is first
         # checked. If it is set quaternion is converted to euler
@@ -441,11 +437,12 @@ class QuadrotorEvolved(QuadrotorPX4):
             0, # target_component
             mask, 
             [att[Q0], att[Q1], att[Q2], att[Q3]],#[0,0,0,0], # att.q,IGNORE ATTITUTDE
-            att[ROLL],
-            att[PITCH],
-            att[YAW],
+            0,#att[ROLL],
+            0,#att[PITCH],
+            0,#att[YAW],
             att[THRUST]
         )
+        """
         if self.armed:
             self.sent_attitude.append(AttitudeTarget(self.system_time_us(), 
                 att[ROLL],
@@ -455,6 +452,7 @@ class QuadrotorEvolved(QuadrotorPX4):
                 [att[Q0], att[Q1], att[Q2], att[Q3]]
                 )
                 )
+        """
     def set_attitude_target2(self, att, mask=0b00000000): 
         # According to modules/mavlink/mavlink_receiver.cpp
         # when this message is received the attitude bit is first
@@ -575,7 +573,7 @@ class QuadrotorGuided(QuadrotorPX4):
             if gate.detected(self.flight_trajectory[-1].x, self.flight_trajectory[-1].y, self.flight_trajectory[-1].z):
                 break
             self.set_position_target_local_ned(gate.x, gate.y, gate.z)
-            self._sleep(start, self.SET_PT_RATE)
+            #self._sleep(start, self.SET_PT_RATE)
 
 
     def fly(self, name, track, input=None, rate = 0):
@@ -590,14 +588,14 @@ class TrajectoryEvolver(object):
     CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.7, 0.4, 0.4, 0.4, 100, 10
     
     TAKEOFF_TIMEOUT = 10000 #ms
-    GATE_HANDICAP = 10000 #ms
+    GATE_HANDICAP = 5000 #ms
 
     def __init__(self, logpath, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
         self.logpath = logpath
         self.px4_connect_string = "{}:{}".format(px4_host, px4_port)
         self.gazebo_host = gazebo_host
         self.gazebo_port = gazebo_port
-        self.gz = GazeboAPI(gazebo_host, gazebo_port)
+        #self.gz = GazeboAPI(gazebo_host, gazebo_port)
 
         self.flight_data = []
         self.flight_data_attitudes = []
@@ -612,8 +610,8 @@ class TrajectoryEvolver(object):
 
         """ Track all the gate times so we can see improvements """
         self.gate_times = []
-#        self.track = straight_line_track(num_gates = 1, altitude = -2)
-        self.track = square_track()
+        self.track = straight_line_track(num_gates = 2, altitude = -2)
+        #self.track = square_track()
 
         # have something as the default that will cause a time out if not reached
         """
@@ -634,14 +632,14 @@ class TrajectoryEvolver(object):
         # by the same position they are 
         self.attitude_field_constraints = [
             {"min": 0, "max": 1000}, # delta time, the time in between each state change 
-            {"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # body roll rate
-            {"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # pitch
-            {"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # yaw 
+            #{"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # body roll rate
+            #{"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # pitch
+            #{"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # yaw 
             {"min": 0, "max": 1}, #  thrust
-            {"min": 0, "max": 1}, #  q0 
-            {"min": 0, "max": 1}, #  q1 
-            {"min": 0, "max": 1}, #  q2 
-            {"min": 0, "max": 1}, #  q3 
+            {"min": -1, "max": 1}, #  q0 
+            {"min": -1, "max": 1}, #  q1 
+            {"min": -1, "max": 1}, #  q2 
+            {"min": -1, "max": 1}, #  q3 
 
         ]
 
@@ -711,21 +709,52 @@ class TrajectoryEvolver(object):
 
         self.toolbox = base.Toolbox()
 
-        self.toolbox.register("trajectory", self.trajectory_from_baseline)
+        # It has been found that using a heuristic for initialize the entire
+        # population will not lead to an optimial solutoin
+        self.toolbox.register("trajectory", self.initial_trajectory)
         self.toolbox.register("individual", tools.initIterate, creator.Individual, self.toolbox.trajectory)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
 
         # Operator registering
         self.toolbox.register("evaluate",self.evaluate)
-        self.toolbox.register("mate", self.mate)
+
+        """ For this applicaiton what is the best method to mate?
+        We will have trajectories with different number of states, thus if we do 
+        mating of a state how do we align?
+
+
+        """
+        self.toolbox.register("mate", self.mate_one_point)
         self.toolbox.register("mutate",self.mutate)
         self.toolbox.register("addFilter", self.mutate_add)
         self.toolbox.register("delFilter", self.mutate_del)
         self.toolbox.register("select", tools.selBest )
 
+
+    def initial_trajectory(self):
+        """ We can create an individual (1) uniform random (2) by some distriubtion  (3) Using a hueristic as a 
+        baseline such as a flight with the PX4 algorithm"""
+
+        # flip a coin
+        if np.random.random() < 0.5:
+            return self.trajectory_from_baseline()
+        else:
+        # randoly generating an input will surely cause unstable flight
+        # what to do about this
+            return self.generate_random_trajectory()
+
+
     def trajectory_from_baseline(self):
-        t = self.baseline_trajectory[:]
-        return t
+        name = "Guided-{}".format(self.counter)
+        self.race(name, QuadrotorGuided)
+        self.counter += 1
+        log = self.parse_log()
+        self.rate = self.compute_rate_from_log(log)
+        baseline_trajectory = self.convert_parsed_log_to_trajectory(log)
+        #t = self.baseline_trajectory[:]
+        return baseline_trajectory # t
+
+
 
     def convert_parsed_log_to_trajectory(self, attitude):
         """ Convert a list of AttitudeTarget objects to a 2D array defining the trajectory.
@@ -743,9 +772,9 @@ class TrajectoryEvolver(object):
                 dt = 100000
 
             cmd.append(dt)
-            cmd.append(attitude[i].body_roll_rate)
-            cmd.append(attitude[i].body_pitch_rate)
-            cmd.append(attitude[i].body_yaw_rate)
+            #cmd.append(attitude[i].body_roll_rate)
+            #cmd.append(attitude[i].body_pitch_rate)
+            #cmd.append(attitude[i].body_yaw_rate)
             cmd.append(attitude[i].thrust)
             cmd += attitude[i].q
 
@@ -755,11 +784,15 @@ class TrajectoryEvolver(object):
 
         pass
 
+    def rand(self, a, b):
+        """Helper function to get a random number [a,b)"""
+        return (b - a) * np.random.random_sample() + a
+
     def _generate_random_command(self):
         
         cmd = []
         for i in range(len(self.attitude_field_constraints)):
-            cmd.append(self.attitude_field_constraints[i]["max"] * np.random.random_sample() + self.attitude_field_constraints[i]["min"])
+            cmd.append(self.rand(self.attitude_field_constraints[i]["min"], self.attitude_field_constraints[i]["max"]))
         return cmd
 
     def generate_trajectory_from_baseline(self):
@@ -796,39 +829,38 @@ class TrajectoryEvolver(object):
 
 
 
+    def mate_one_point(self, input_A, input_B):
+        """ Pick a random point of the smaller and swap the tails"""
+        pt = np.random.randint(min(len(input_A), len(input_B)))
+        tmp = input_B[pt:]
+        input_B[pt:] = input_A[pt:]
+        input_A[pt:] = tmp 
 
-    def mate_commands(self, input_A, input_B):
+        return input_A, input_B
+    def mate_trajectory(self, input_A, input_B):
+        """ Mate trajectory by swapping an entire trajectory state"""
         # randomly swap some commands
         for i in range(min(len(input_A), len(input_B))):
-            if np.random.random() < 0.5:
-                tmp = input_A[i]
-                input_A[i] = input_B[i]
-                input_B[i] = tmp
+            #if np.random.random() < 0.5:
+            tmp = input_A[i]
+            input_A[i] = input_B[i]
+            input_B[i] = tmp
 
         return input_A, input_B
 
-    def mate_inputs(self, input_A, input_B):
+    def mate_trajectory_state_parameter(self, input_A, input_B):
+        """Mate individual state parameters"""
         for i in range(min(len(input_A), len(input_B))):
 
             for j in range(len(self.attitude_field_constraints)):
-                if np.random.random() < 0.5:
-                    tmp = input_A[i][j]
-                    input_A[i][j] = input_B[i][j]
-                    input_B[i][j] = tmp
+                #if np.random.random() < 0.5:
+                tmp = input_A[i][j]
+                input_A[i][j] = input_B[i][j]
+                input_B[i][j] = tmp
 
         return input_A, input_B
 
 
-    def mate(self, input_A, input_B):
-
-        # There are two ways we can mate
-        # by command or input
-        #
-        input_A, inputB = self.mate_commands(input_A, input_B)
-        input_A, inputB = self.mate_inputs(input_A, input_B)
-        
-        
-        return input_A, input_B
 
     def mutate(self, inputs):
         """ Given a trajectory, mutate the states by first randomly selecting one of the set attitude target
@@ -846,12 +878,12 @@ class TrajectoryEvolver(object):
         # TODO  Does it make sense to adjust from the original or 
         # choose it randoml yas we are here?
         new_input = max * np.random.random_sample() + min 
-        random_cmd[random_input_index] = new_input
-        
+        inputs[random_cmd_index][random_input_index] = new_input 
 
         return inputs,
 
     def mutate_add(self, inputs):
+        """Randomly create a new trajectory state"""
         cmd = self._generate_random_command()
         random_cmd_index = np.random.randint(len(inputs))
         #Insert it randomly
@@ -859,6 +891,7 @@ class TrajectoryEvolver(object):
         return inputs,
 
     def mutate_del(self, inputs):
+        """ Randomly deleted a trajectory state"""
         random_cmd_index = np.random.randint(len(inputs))
         inputs.pop(random_cmd_index)
         return inputs,
@@ -894,7 +927,9 @@ class TrajectoryEvolver(object):
         elif len(gate_times) == 0:
             return (self.track.gate_count * GATE_PENALTY),
         else:
-            return (gate_times[-1] + (self.track.gate_count - len(gate_times)) * GATE_PENALTY),
+            # if the aircarft made it to some gates then 
+            # take the last reached time then penalize proportional for those not reached
+            return (gate_times[-1] + ((self.track.gate_count - len(gate_times)) * GATE_PENALTY)),
             
 
         return gate_times[-1],
@@ -939,6 +974,10 @@ class TrajectoryEvolver(object):
 
         gen = 1
         while gen <= self.NGEN: # and (logbook[-1]["max"][0] != 0.0 or logbook[-1]["max"][1] != 0.0):
+            logger.info("###############################################")
+            logger.info("                  GEN-{}".format(gen))
+            logger.info("###############################################")
+
             # Select the next generation individuals
             offspring = self.toolbox.select(pop, len(pop))
             # Clone the selected individuals
@@ -985,7 +1024,9 @@ class TrajectoryEvolver(object):
 
     def repeat(self):
         self.race("baseline", QuadrotorGuided)
-
+        self.race("baseline2", QuadrotorGuided)
+        self.race("baseline3", QuadrotorGuided)
+        """
         log = self.parse_log()
         rate = self.compute_rate_from_log(log)
         logger.info("Data appears to be logged at {} Hz".format(rate))
@@ -996,7 +1037,7 @@ class TrajectoryEvolver(object):
         #self.flight_data.append(FlightData("shadow-sent", None, None, self.vehicle.sent_attitude ))
 
         #self.race("shadow2-logged", QuadrotorEvolved, input=baseline_logged_att_sp, rate = rate)
-
+        """
         data = FlightAnalysis(self.track.gates, self.flight_data)
         data.plot_input(self.flight_data)
         data.plot_3D_path()
@@ -1028,8 +1069,8 @@ class TrajectoryEvolver(object):
         # Collect the flight data from the race
         try:
             logged_att_sp = self.parse_log()
-            for i in logged_att_sp[:2]:
-                print i
+            #for i in logged_att_sp[:2]:
+            #    print i
             self.flight_data.append(FlightData(name, self.vehicle.gate_times, self.vehicle.flight_trajectory, logged_att_sp))
         except Exception as e:
             logger.error(e)
