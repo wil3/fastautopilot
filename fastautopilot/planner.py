@@ -1,5 +1,8 @@
 """
 Minimize time to fly path
+
+We evolve on discrete roll, pitch, yaw and then convert to quaternions for actual
+flight.
 """
 
 import logging.config
@@ -35,6 +38,9 @@ Q0 =2
 Q1 =3
 Q2 =4
 Q3 =5
+ROLL = 2
+PITCH = 3
+YAW = 4
 
 def init_logging():
     log_config = os.path.join(".", "../conf/logging.yaml")
@@ -47,6 +53,90 @@ def init_logging():
 
 logger = logging.getLogger('fastautopilot')
 loggerPX4 = logging.getLogger('PX4')
+
+"""
+def quaternion_to_eulerian(w, x, y, z):
+    #Return the Eulerian in degrees
+    ysqr = y*y
+    
+    t0 = +2.0 * (w * x + y*z)
+    t1 = +1.0 - 2.0 * (x*x + ysqr)
+    roll = math.degrees(math.atan2(t0, t1))
+    
+    t2 = +2.0 * (w*y - z*x)
+    t2 =  1 if t2 > 1 else t2
+    t2 = -1 if t2 < -1 else t2
+    pitch = math.degrees(math.asin(t2))
+    
+    t3 = +2.0 * (w * z + x*y)
+    t4 = +1.0 - 2.0 * (ysqr + z*z)
+    yaw = math.degrees(math.atan2(t3, t4))
+    
+    return roll, pitch, yaw 
+"""
+
+def quaternion_to_eulerian(w, x, y, z):
+    dcm = quaternion_to_dcm(w, x, y, z)
+    return dcm_to_euler(dcm)
+
+def eulerian_to_quaternion(roll, pitch, yaw):
+    """ roll pitch yaw in radians
+    Copied from https://github.com/mavlink/c_library_v1/blob/master/mavlink_conversions.h """
+    cosPhi_2 = math.cos(roll * 0.5)
+    sinPhi_2 = math.sin(roll * 0.5)
+    cosTheta_2 = math.cos(pitch * 0.5)
+    sinTheta_2 = math.sin(pitch * 0.5)
+    cosPsi_2 = math.cos(yaw * 0.5)
+    sinPsi_2 = math.sin(yaw * 0.5)
+
+    w = (cosPhi_2 * cosTheta_2 * cosPsi_2 +
+                                 sinPhi_2 * sinTheta_2 * sinPsi_2)
+    x = (sinPhi_2 * cosTheta_2 * cosPsi_2 -
+        cosPhi_2 * sinTheta_2 * sinPsi_2)
+    y = (cosPhi_2 * sinTheta_2 * cosPsi_2 +
+        sinPhi_2 * cosTheta_2 * sinPsi_2)
+    z = (cosPhi_2 * cosTheta_2 * sinPsi_2 -
+        sinPhi_2 * sinTheta_2 * cosPsi_2)
+    return w, x, y, z
+def quaternion_to_dcm(a, b, c, d):
+    dcm = [[0]*3 for _ in range(3)] 
+    aSq = a * a
+    bSq = b * b
+    cSq = c * c
+    dSq = d * d
+    dcm[0][0] = aSq + bSq - cSq - dSq
+    dcm[0][1] = 2 * (b * c - a * d)
+    dcm[0][2] = 2 * (a * c + b * d)
+    dcm[1][0] = 2 * (b * c + a * d)
+    dcm[1][1] = aSq - bSq + cSq - dSq
+    dcm[1][2] = 2 * (c * d - a * b)
+    dcm[2][0] = 2 * (b * d - a * c)
+    dcm[2][1] = 2 * (a * b + c * d)
+    dcm[2][2] = aSq - bSq - cSq + dSq
+
+    return dcm
+
+def dcm_to_euler(dcm):
+    """ return roll pitch yaw in radians"""
+
+    pitch = math.asin(-dcm[2][0])
+    M_PI_2 = math.pi/2.0
+
+    if (abs(pitch - M_PI_2) < 0.001): 
+        roll = 0.0
+        yaw = (math.atan2(dcm[1][2] - dcm[0][1],
+                dcm[0][2] + dcm[1][1]) + roll)
+
+    elif (abs(pitch + M_PI_2) < 0.001): 
+        roll = 0.0
+        yaw = math.atan2(dcm[1][2] - dcm[0][1],
+                  dcm[0][2] + dcm[1][1] - roll)
+
+    else: 
+        roll =math.atan2(dcm[2][1], dcm[2][2])
+        yaw = math.atan2(dcm[1][0], dcm[0][0])
+
+    return roll, pitch, yaw
 
 
 class ControlInput(object):
@@ -318,7 +408,11 @@ class QuadrotorPX4(Vehicle):
 
     def fly(self, name, track, trajectory=None, rate = 0):
         """ Fly the given track with the optional inputs.
-        If rate is 0 then send the trajectory as fast as possible"""
+        If rate is 0 then send the trajectory as fast as possible
+
+        trajectory:  An array of states in which each state is array containing the time to maintain the state
+        the thrust, and target attitutde quaternion
+        """
         self.name = name
         self.track = track
         self.input = trajectory
@@ -560,7 +654,7 @@ class QuadrotorGuided(QuadrotorPX4):
             print "Next gate is at ", gate
             self.set_location(gate)
 
-        self.info("All waypoints reached, mission thread complete")
+        #self.info("All waypoints reached, mission thread complete")
         
     def set_location(self, gate):
         """Monitor the progress and set the next point once reached"""
@@ -631,15 +725,12 @@ class TrajectoryEvolver(object):
         # of an array of these fields thus the contains are indexed
         # by the same position they are 
         self.attitude_field_constraints = [
-            {"min": 0, "max": 1000}, # delta time, the time in between each state change 
-            #{"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # body roll rate
-            #{"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # pitch
-            #{"min": -(1.0 * 3.1415), "max": 1.0 * 3.1415}, # yaw 
-            {"min": 0, "max": 1}, #  thrust
-            {"min": -1, "max": 1}, #  q0 
-            {"min": -1, "max": 1}, #  q1 
-            {"min": -1, "max": 1}, #  q2 
-            {"min": -1, "max": 1}, #  q3 
+            # we 
+            {"min": 1000, "max": 1000000, "resolution": 1000.0 }, # delta time in us, the time in between each state change. min is 1ms, max 1s 
+            {"min": 0, "max": 1, "resolution": 1000.0}, #  thrust
+            {"min": -20, "max": 20, "resolution": 1000.0}, # Roll in degrees
+            {"min": -20, "max": 20, "resolution": 1000.0}, # pitch in degrees
+            {"min": -20, "max": 20, "resolution": 1000.0} # Yaw in degrees
 
         ]
 
@@ -745,54 +836,71 @@ class TrajectoryEvolver(object):
 
 
     def trajectory_from_baseline(self):
+        logger.info("Creating trajectory from guided copter")
         name = "Guided-{}".format(self.counter)
         self.race(name, QuadrotorGuided)
         self.counter += 1
         log = self.parse_log()
         self.rate = self.compute_rate_from_log(log)
-        baseline_trajectory = self.convert_parsed_log_to_trajectory(log)
+        baseline_trajectory =self.convert_flight_log_to_euler_trajectory(log)
         #t = self.baseline_trajectory[:]
         return baseline_trajectory # t
 
+    def continuous_to_discrete(self, value, constraint):
+        """Convert a continuous value to a discrete one depending on its constraints"""
+        step = (constraint["max"] - constraint["min"]) / constraint["resolution"]
+        return math.floor(value/step) * step
 
-
-    def convert_parsed_log_to_trajectory(self, attitude):
-        """ Convert a list of AttitudeTarget objects to a 2D array defining the trajectory.
-        Times are converted to deltas
+    def convert_flight_log_to_euler_trajectory(self, attitude):
+        """ Convert a list of AttitudeTarget objects to a 2D array defining the trajectory that will be
+        used by the controller to play back.
+        This is also what ends up being evolved. Times are converted to deltas
         """
         # A 2D array in which each 
         # row is a command specify how long it should be sent for
-        input = []
+        trajectory = []
         for i in range(len(attitude)):
-            cmd = []
+            state = []
             if i+1 < len(attitude):
                 dt = attitude[i+1].time_us - attitude[i].time_us
             else:
                 # Go as long as it wants on the last one
-                dt = 100000
+                dt = 100000000
 
-            cmd.append(dt)
-            #cmd.append(attitude[i].body_roll_rate)
-            #cmd.append(attitude[i].body_pitch_rate)
-            #cmd.append(attitude[i].body_yaw_rate)
-            cmd.append(attitude[i].thrust)
-            cmd += attitude[i].q
+            state.append(dt)
+            #state.append(attitude[i].body_roll_rate)
+            #state.append(attitude[i].body_pitch_rate)
+            #state.append(attitude[i].body_yaw_rate)
+            thrust = attitude[i].thrust
+            thrust_discrete = self.continuous_to_discrete(thrust, self.attitude_field_constraints[THRUST])
+            state.append(thrust_discrete)
+            #state += attitude[i].q
+            q = attitude[i].q
+            roll, pitch, yaw = quaternion_to_eulerian(q[0], q[1], q[2], q[3])
+            roll_discrete = self.continuous_to_discrete(math.degrees(roll), self.attitude_field_constraints[ROLL])
+            pitch_discrete = self.continuous_to_discrete(math.degrees(pitch), self.attitude_field_constraints[PITCH])
+            yaw_discrete = self.continuous_to_discrete(math.degrees(yaw), self.attitude_field_constraints[YAW])
 
-            input.append(cmd)
+            state.append(roll_discrete)
+            state.append(pitch_discrete)
+            state.append(yaw_discrete)
 
-        return input
+            #print state
+            trajectory.append(state)
 
-        pass
+        return trajectory
+
 
     def rand(self, a, b):
         """Helper function to get a random number [a,b)"""
         return (b - a) * np.random.random_sample() + a
 
     def _generate_random_command(self):
-        
         cmd = []
         for i in range(len(self.attitude_field_constraints)):
-            cmd.append(self.rand(self.attitude_field_constraints[i]["min"], self.attitude_field_constraints[i]["max"]))
+            continuous = self.rand(self.attitude_field_constraints[i]["min"], self.attitude_field_constraints[i]["max"])
+            discrete = self.continuous_to_discrete(continuous, self.attitude_field_constraints[i])
+            cmd.append(discrete)
         return cmd
 
     def generate_trajectory_from_baseline(self):
@@ -941,11 +1049,13 @@ class TrajectoryEvolver(object):
     def start(self):
         signal.signal(signal.SIGINT, self.signal_handler)
         np.random.seed(1)
-        
+    
+        """
         self.baseline_path, self.best_times = self.race("baseline", QuadrotorGuided)
         log = self.parse_log()
         self.rate = self.compute_rate_from_log(log)
-        self.baseline_trajectory = self.convert_parsed_log_to_trajectory(log)
+        self.baseline_trajectory = self.convert_flight_log_to_euler_trajectory(log)
+        """
 
         self.init_search()
 
@@ -1024,24 +1134,31 @@ class TrajectoryEvolver(object):
 
     def repeat(self):
         self.race("baseline", QuadrotorGuided)
-        self.race("baseline2", QuadrotorGuided)
-        self.race("baseline3", QuadrotorGuided)
-        """
+        #self.race("baseline2", QuadrotorGuided)
+        #self.race("baseline3", QuadrotorGuided)
         log = self.parse_log()
         rate = self.compute_rate_from_log(log)
         logger.info("Data appears to be logged at {} Hz".format(rate))
-        baseline_logged_att_sp = self.convert_parsed_log_to_trajectory(log)
+        baseline_logged_att_sp = self.convert_flight_log_to_euler_trajectory(log)
 
-        self.race("shadow-logged", QuadrotorEvolved, input=baseline_logged_att_sp, rate = rate)
+        #self.race("shadow-logged", QuadrotorEvolved, input=baseline_logged_att_sp, rate = rate)
 
         #self.flight_data.append(FlightData("shadow-sent", None, None, self.vehicle.sent_attitude ))
 
         #self.race("shadow2-logged", QuadrotorEvolved, input=baseline_logged_att_sp, rate = rate)
-        """
         data = FlightAnalysis(self.track.gates, self.flight_data)
         data.plot_input(self.flight_data)
         data.plot_3D_path()
         data.show()
+
+    def convert_trajectory_euler_to_quaternion(self, trajectory):
+        
+        for i in trajectory:
+            roll, pitch, yaw = i[-3:] # attitude is last
+            w, x, y, z = eulerian_to_quaternion(math.radians(roll), math.radians(pitch), math.radians(yaw))
+            i[-3:] = [w, x, y, z]
+
+        return trajectory
 
 
     def race(self, name, vehicle_class, input=None, rate = 0):
@@ -1059,6 +1176,9 @@ class TrajectoryEvolver(object):
         t = threading.Thread(target=self.race_monitor, args=(self.vehicle,))
         t.start()
 
+
+        if input:
+            input = self.convert_trajectory_euler_to_quaternion(input)
         self.vehicle.fly(name, self.track, input, rate = rate)
         while self.racing:
             time.sleep(1)
@@ -1196,8 +1316,9 @@ if __name__ == "__main__":
     init_logging()
     log_path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log"
     e = TrajectoryEvolver(log_path)
-    #e.start()
-    e.repeat()
+    e.start()
+    #e.repeat()
+
 
 
 
