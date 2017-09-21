@@ -6,7 +6,6 @@ import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 import mpl_toolkits.mplot3d.axes3d as p3
 
-from label_lines import *
 
 
 def split_input_data(data):
