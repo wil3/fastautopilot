@@ -1,3 +1,31 @@
+
+#Installation
+
+1. Install Gazebo 8.1.1 following instructions
+   [here](http://gazebosim.org/tutorials?tut=install_ubuntu)
+
+2. Clone our fork of PX4 repo
+https://dev.px4.io/en/setup/dev_env_linux_ubuntu.html
+
+```
+wget
+https://raw.githubusercontent.com/PX4/Devguide/master/build_scripts/ubuntu_sim_nuttx.sh
+```
+run  ubuntu_sim.sh
+
+3. Clone the GZMOCAP library
+```
+git clone https://github.com/wil3/gzmocap.git
+```
+
+4. Clone our fork or pygazebo
+```
+git clone https://github.com/wil3/pygazebo.git
+```
+
+4. Clone this library
+
+
 # Run PX4 in SITL
 ```
 make posix_sitl_lpe gazebo
@@ -43,3 +71,16 @@ default 0.002 step 500
 
 
 After 128 iterations we got a segment fault. Try running without gzclient
+
+It appears Gazebo is always publishing certain topics whether or not you
+subscribe. Is there a way to not have it always publish
+
+
+## Message passing using google protobufs
+WARNING the compilied messages in pygazebo will not work with Gazebo 8.1.1, must
+recompile.
+```
+protoc --proto_path=gazebo/gazebo/msgs
+--python_out=/pygazebo/pygazebo/msg
+msgs/*proto
+```
