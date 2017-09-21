@@ -8,6 +8,7 @@ import pygazebo.msg.pose_stamped_pb2
 import pygazebo.msg.poses_stamped_pb2
 import pygazebo.msg.model_pb2
 import pygazebo.msg.gps_pb2
+import pygazebo.msg.subscribe_pb2
 
 # There is no Python 3 support for drone kit so use trollius
 # WARNING: trollius is depreciated
@@ -18,6 +19,7 @@ import trollius as asyncio
 import traceback
 
 import concurrent
+import time
 
 class GazeboAPI:
     MODEL_NAME = "iris"
@@ -88,6 +90,34 @@ class GazeboAPI:
                     #print "Model reset!"
                 break
 
+    def _unsubscribe_callback(self, data):
+        print "Unsubscribed!"
+        self.waiting_for_unsubscribe = False
+
+    def _subscribe_message(self):
+        to_send = pygazebo.msg.subscribe_pb2.Subscribe()
+        to_send.topic ='/gazebo/default/pose/info' 
+        to_send.host = self.host
+        to_send.port = self.port
+        to_send.msg_type = 'gazebo.msgs.PosesStamped'
+        to_send.latching = False
+        return to_send
+
+    def _test(self):
+        manager = yield From(pygazebo.connect((self.host, self.port)))
+        self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
+        yield From(trollius.sleep(1))
+        print "Now unsubscribe"
+        #while True:
+        manager.unsubscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._unsubscribe_callback)
+        #pub = yield From(manager.unsubscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._unsubscribe_callback))
+        #pub.publish(self._subscribe_message())
+        yield From(trollius.sleep(1))
+
+    def test(self):
+        self.loop = asyncio.get_event_loop()
+        self.loop.run_until_complete(self._test())
+
     def _reset_model(self):#, future):
         
         #start listening for the event
@@ -96,9 +126,14 @@ class GazeboAPI:
         #print "pub init"
         publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
         #print "sub init"
+       
+        # There doesnt seem to be a way to 
+        # unsubscribe from a topic which means the first time we subscribe
+        # we will always have these messages sent to us
         self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
         world = self._world_reset_message()
         self.waiting_for_message = True
+        self.waiting_for_unsubscribe = True
 
         publish_interval = 1 # publish at this interval
         poll_interval = 0.1 # Sleep for this long to wait for a response message
@@ -107,11 +142,19 @@ class GazeboAPI:
 
             #print "sleep"
             yield From(trollius.sleep(poll_interval))
-            #print "pub"
             dt = time.time() - last_time
             if dt > publish_interval: 
+                #print "pub"
                 yield From(publisher.publish(world))
                 last_time = time.time()
+
+            """
+            if not self.waiting_for_message:
+                print "Unsubscribing"
+                manager.unsubscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._unsubscribe_callback)
+                #pass
+            """
+
             #print "wait"
             #yield From(self.pose_info_subscriber.wait_for_connection())
 
@@ -144,7 +187,7 @@ class GazeboAPI:
         self.loop.run_until_complete(self._reset_model())
         print "Loop complete, closing connection"
         # This causes Bad file descriptor'
-        self.close_connection()
+        #self.close_connection()
         #executor.shutdown(wait=True)
 
         #Closing the event  causes an exception to be raised, this is irriversible do not do this!
