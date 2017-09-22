@@ -288,6 +288,8 @@ class FlightAnalysis(object):
             gate.plot3d(ax)
         ax.legend()
 
+    def save(self):
+        plt.savefig('flight.png')
     def show(self):
 #        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
 #        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
