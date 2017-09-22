@@ -22,7 +22,7 @@ from pyulog.core import ULog
 
 import glob
 import signal
-
+import argparse
 
 from deap import algorithms
 from deap import base
@@ -280,7 +280,7 @@ class QuadrotorPX4(Vehicle):
 
             if self.armed and not self.time_armed:
                 self.time_armed = t.time_boot_ms - self.time_first
-                self.info("Armed at {}".format(self.time_armed))
+                self.debug("Armed at {}".format(self.time_armed))
 
             if self.time_armed:
                 self.time_since_armed = self.time_ms - self.time_armed 
@@ -328,7 +328,7 @@ class QuadrotorPX4(Vehicle):
             # so detect takeoff our self
             elif (self.curr_land_state == mavutil.mavlink.MAV_LANDED_STATE_ON_GROUND and
             state.landed_state == mavutil.mavlink.MAV_LANDED_STATE_IN_AIR):
-                self.info("RACE BEGIN!")
+                self.debug("RACE BEGIN!")
                 self.record = True
                 self.time_start = self.time_ms
 
@@ -342,7 +342,7 @@ class QuadrotorPX4(Vehicle):
             if not self.time_takeoff and  data.z < self.TAKEOFF_JITTER and self.armed:
                 # Normalize
                 self.time_takeoff = data.time_boot_ms - self.time_first
-                self.info("Take off detected! {} {} {}".format(self.time_takeoff, self.start_position.z, data.z))
+                self.debug("Take off detected! {} {} {}".format(self.time_takeoff, self.start_position.z, data.z))
 
 
             # TODO move to gate?
@@ -403,7 +403,7 @@ class QuadrotorPX4(Vehicle):
         """Block until we get into offboard mode """
         while self.mode.name != "OFFBOARD" and self.running:
             self._master.set_mode_px4('OFFBOARD', None, None)
-            self.info("Waiting for mode change, current mode={}".format(self.mode.name))
+            self.debug("Waiting for mode change, current mode={}".format(self.mode.name))
             time.sleep(1)
 
     def fly(self, name, track, trajectory=None, rate = 0):
@@ -419,17 +419,17 @@ class QuadrotorPX4(Vehicle):
         self.rate = rate
         self.running = True
         
-        self.info("Starting controller thread")
+        self.debug("Starting controller thread")
         t = threading.Thread(target=self.controller)
         t.start()
         
-        self.info("Start offboard mode change")
+        self.debug("Start offboard mode change")
         self.change_to_offboard_mode()
-        self.info("Mode changed to {}".format(self.mode.name))
+        self.debug("Mode changed to {}".format(self.mode.name))
 
-        self.info("Arming...")
+        self.debug("Arming...")
         self.arm()
-        self.info("Arm complete")
+        self.debug("Arm complete")
 
         while self.armed and self.running:
             time.sleep(1)
@@ -464,6 +464,8 @@ class QuadrotorPX4(Vehicle):
 
     def info(self, message):
         logger.info("[World={:.0f} FC={} Boot={} Sim={} Liftoff={}]\t{}".format(self.system_time_us(), self.time_fc_usec, self.time_boot_ms, self.time_ms, self.time_since_takeoff, message))
+    def debug(self, message):
+        logger.debug("[World={:.0f} FC={} Boot={} Sim={} Liftoff={}]\t{}".format(self.system_time_us(), self.time_fc_usec, self.time_boot_ms, self.time_ms, self.time_since_takeoff, message))
 
     def system_time_ms(self):
         return time.time() * 1000.0
@@ -507,7 +509,7 @@ class QuadrotorEvolved(QuadrotorPX4):
         # Initialize any different parameters
 
         self.set_max_horizontal_velocity(30.0)
-        self.info("Playback at {}Hz".format(rate))
+        self.debug("Playback at {}Hz".format(rate))
         super(QuadrotorEvolved, self).fly(name, track, input, rate)
 
     def convert_rate_to_time(self, rate):
@@ -604,10 +606,10 @@ class QuadrotorEvolved(QuadrotorPX4):
             if time_lapsed_s < T:
                 time.sleep(T - time_lapsed_s )
 
-        self.info("Set {} commands".format(command_index))
+        self.debug("Set {} commands".format(command_index))
 
     def controller2(self):
-        self.info("Thread started")
+        self.debug("Thread started")
         (t, roll, pitch, yaw, thrust) = split_input_data(self.input)
         intervals_ms = np.diff(t)
 
@@ -635,7 +637,7 @@ class QuadrotorEvolved(QuadrotorPX4):
 
             self.set_attitude_target(curr_attitude)
 
-        self.info("Set {} commands".format(command_index))
+        self.debug("Set {} commands".format(command_index))
 
 
 class QuadrotorGuided(QuadrotorPX4):
@@ -651,10 +653,10 @@ class QuadrotorGuided(QuadrotorPX4):
                 break
 
             gate = gates[i]
-            print "Next gate is at ", gate
+            #print "Next gate is at ", gate
             self.set_location(gate)
 
-        #self.info("All waypoints reached, mission thread complete")
+        #self.debug("All waypoints reached, mission thread complete")
         
     def set_location(self, gate):
         """Monitor the progress and set the next point once reached"""
@@ -685,6 +687,7 @@ class TrajectoryEvolver(object):
     GATE_HANDICAP = 5000 #ms
 
     def __init__(self, logpath, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
+
         self.logpath = logpath
         self.px4_connect_string = "{}:{}".format(px4_host, px4_port)
         self.gazebo_host = gazebo_host
@@ -698,6 +701,7 @@ class TrajectoryEvolver(object):
         self.best_times = None
         self.vehicle = None
         self.racing = False
+        self.first = False
 
         """ Instance counter for each iteration """
         self.counter = 1
@@ -764,7 +768,7 @@ class TrajectoryEvolver(object):
         return not vehicle.time_takeoff and vehicle.time_ms >  self.TAKEOFF_TIMEOUT
 
     def race_monitor(self, vehicle):
-        logger.info("Waiting for race to timeout")
+        logger.debug("Waiting for race to timeout")
         abort = False
         while True:#self.racing:
             if vehicle.track:
@@ -786,10 +790,10 @@ class TrajectoryEvolver(object):
                     vehicle.armed = False
                     break
             time.sleep(1)
-            logger.info("OK t={} Liftoff={} {} {}".format(vehicle.time_ms, vehicle.time_since_takeoff, vehicle.track.gates, vehicle.gate_times))
+            logger.debug("OK t={} Liftoff={} {} {}".format(vehicle.time_ms, vehicle.time_since_takeoff, vehicle.track.gates, vehicle.gate_times))
 
         self.racing = False
-        logger.info("outside loop")
+        logger.debug("outside loop")
 
 
     def init_search(self):
@@ -826,8 +830,9 @@ class TrajectoryEvolver(object):
         """ We can create an individual (1) uniform random (2) by some distriubtion  (3) Using a hueristic as a 
         baseline such as a flight with the PX4 algorithm"""
 
-        # flip a coin
-        if np.random.random() < 0.5:
+        # flip a coin, however we need to use a baseline first so the best times are set
+        if self.first or np.random.random() < 0.5:
+            self.first = False
             return self.trajectory_from_baseline()
         else:
         # randoly generating an input will surely cause unstable flight
@@ -1084,9 +1089,9 @@ class TrajectoryEvolver(object):
 
         gen = 1
         while gen <= self.NGEN: # and (logbook[-1]["max"][0] != 0.0 or logbook[-1]["max"][1] != 0.0):
-            logger.info("###############################################")
+            #logger.info("###############################################")
             logger.info("                  GEN-{}".format(gen))
-            logger.info("###############################################")
+            #logger.info("###############################################")
 
             # Select the next generation individuals
             offspring = self.toolbox.select(pop, len(pop))
@@ -1165,9 +1170,9 @@ class TrajectoryEvolver(object):
         """ Perform once race with the specified vehicle  following the given trajectory"""
         self.racing = True
 
-        logger.info("###########################################################")
+        #logger.info("###########################################################")
         logger.info("                RACE STARTING: {}                          ".format(name))
-        logger.info("###########################################################")
+        #logger.info("###########################################################")
 
 
         self.vehicle = connect(self.px4_connect_string, wait_ready=True, vehicle_class=vehicle_class, status_printer=None)
@@ -1182,7 +1187,7 @@ class TrajectoryEvolver(object):
         self.vehicle.fly(name, self.track, input, rate = rate)
         while self.racing:
             time.sleep(1)
-        logger.info("Joining...")
+        logger.debug("Joining...")
         t.join()
         self.vehicle.close()
 
@@ -1311,11 +1316,24 @@ class FlightData:
 
 
 
+def check_directory(value):
+    if not os.path.isdir(value):
+        raise argparse.ArgumentTypeError("PX4 home directory {} does not exist".format(value))
+
+    log_dir = os.path.join(value, "build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log")
+    if not os.path.isdir(log_dir):
+        raise argparse.ArgumentTypeError("Log directory {} does not exist".format(log_dir))
+
+    return log_dir
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("px4", help="Home directory of PX4 firmware", type=check_directory)
+    args = parser.parse_args()
+
     init_logging()
-    log_path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log"
-    e = TrajectoryEvolver(log_path)
+    #log_path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log"
+    e = TrajectoryEvolver(args.px4)
     e.start()
     #e.repeat()
 
