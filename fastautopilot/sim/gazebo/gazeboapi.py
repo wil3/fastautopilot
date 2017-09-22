@@ -185,7 +185,6 @@ class GazeboAPI:
 
 
         self.loop.run_until_complete(self._reset_model())
-        print "Loop complete, closing connection"
         # This causes Bad file descriptor'
         #self.close_connection()
         #executor.shutdown(wait=True)
