@@ -682,7 +682,7 @@ class QuadrotorGuided(QuadrotorPX4):
 class TrajectoryEvolver(object):
     """ Radius in meters that is accepted to hit the waypoint """
     WAYPOINT_R = 1.0
-    CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.7, 0.4, 0.4, 0.4, 100, 10
+    CXPB, MUTPB, ADDPB, DELPB, MU, NGEN, POP = 0.7, 0.4, 0.4, 0.4, 100, 1000, 20
     
     TAKEOFF_TIMEOUT = 10000 #ms
     GATE_HANDICAP = 5000 #ms
@@ -1069,7 +1069,7 @@ class TrajectoryEvolver(object):
 
         self.init_search()
 
-        pop = self.toolbox.population(n=20)
+        pop = self.toolbox.population(n=self.POP)
         """
 	hof = tools.ParetoFront()
         
@@ -1124,18 +1124,33 @@ class TrajectoryEvolver(object):
             fitnesses = map(self.toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
-            
+
+            logger.info("  Evaluated %i individuals" % len(invalid_ind))
+
             b = tools.selBest(pop, k=1)[0]
            
-            # Select the next generation population
-            pop = self.toolbox.select(pop + offspring, self.MU)
+            # Replace the population with the offspring 
+            pop[:] = offspring#self.toolbox.select(pop + offspring, self.MU)
             gen += 1
 
+ # Gather all the fitnesses in one list and print the stats
+            fits = [ind.fitness.values[0] for ind in pop]
+ #                 
+            # Generate stats
+	    length = len(pop)
+	    mean = sum(fits) / length
+	    sum2 = sum(x*x for x in fits)
+	    std = abs(sum2 / length - mean**2)**0.5
+
+	    logger.info("  Min %s" % min(fits))
+	    logger.info("  Max %s" % max(fits))
+	    logger.info("  Avg %s" % mean)
+	    logger.info("  Std %s" % std)
 
             if self.check_log_flag():
                 data = FlightAnalysis()
                 data.plot_input(self.flight_data)
-                data.show()
+                data.save()
 
         return pop
 
