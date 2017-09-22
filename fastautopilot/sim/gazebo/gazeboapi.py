@@ -20,6 +20,8 @@ import traceback
 
 import concurrent
 import time
+import threading
+import multiprocessing
 
 class GazeboAPI:
     MODEL_NAME = "iris"
@@ -33,6 +35,10 @@ class GazeboAPI:
 
         self.pose_info_subscriber = None
         self.waiting_for_message = True
+        self.is_reset = False
+        self.callback = None
+        self.listening = True
+        self.should_reset = False
 
     def get_sim_time(self, callback):
         self.callback = callback
@@ -87,7 +93,13 @@ class GazeboAPI:
             if pose.name == self.MODEL_NAME:
                 if self._at_origin(pose):
                     self.waiting_for_message = False
+                    self.is_reset = True
+                    self.should_reset = False
                     #print "Model reset!"
+                    if self.callback:
+                        self.callback()
+                else:
+                    self.is_reset = False
                 break
 
     def _unsubscribe_callback(self, data):
@@ -171,6 +183,85 @@ class GazeboAPI:
         #self.pose_info_subscriber.remove()
         #self.reset_model_callback()
         #future.set_result('Done!')
+
+        manager._master.socket.close()
+        manager._server.socket.close()
+    
+    def _listen(self):#, future):
+        
+        #start listening for the event
+        #print "connect"
+        manager = yield From(pygazebo.connect((self.host, self.port)))
+        #print "pub init"
+        publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
+        #print "sub init"
+       
+        # There doesnt seem to be a way to 
+        # unsubscribe from a topic which means the first time we subscribe
+        # we will always have these messages sent to us
+        self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
+        world = self._world_reset_message()
+        self.waiting_for_message = True
+        self.waiting_for_unsubscribe = True
+
+        publish_interval = 1 # publish at this interval
+        poll_interval = 0.1 # Sleep for this long to wait for a response message
+        last_time = 0
+        while self.listening: 
+
+            yield From(trollius.sleep(poll_interval))
+            dt = time.time() - last_time
+            if self.should_reset and dt > publish_interval: 
+                #print "pub"
+                yield From(publisher.publish(world))
+                last_time = time.time()
+
+    def _reset(self):
+        publisher = yield From(self.manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
+        world = self._world_reset_message()
+
+        publish_interval = 1 # publish at this interval
+        poll_interval = 0.1 # Sleep for this long to wait for a response message
+        last_time = 0
+        while not self.is_reset: 
+            yield From(trollius.sleep(poll_interval))
+            dt = time.time() - last_time
+            if dt > publish_interval: 
+                yield From(publisher.publish(world))
+                last_time = time.time()
+
+    def _listen2(self):
+        self.manager = yield From(pygazebo.connect((self.host, self.port)))
+        publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
+        self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
+
+
+    def _listen_start_loop(self, loop):
+        asyncio.set_event_loop(loop)
+        #self.loop = asyncio.get_event_loop()
+        loop.run_until_complete(self._listen())
+
+    def listen(self, callback=None):
+        self.callback = callback
+        #self.loop = asyncio.get_event_loop()
+        #self.loop.run_forever(self._listen())
+        #self.listen_thread = multiprocessing.Process(target=self._listen_start_loop)
+        new_loop = asyncio.new_event_loop()
+
+        self.listen_thread = threading.Thread(target=self._listen_start_loop, args=(new_loop,))
+        self.listen_thread.start()
+
+    def shutdown(self):
+        self.listening = False
+        self.listen_thread.join()
+
+    def reset(self):
+        """Block until reset"""
+        self.should_reset = True
+        while not self.is_reset:
+            time.sleep(0.1)
+
+
 
     def reset_model(self, callback):
         #self.reset_model_callback = callback
