@@ -1154,7 +1154,7 @@ class TrajectoryEvolver(object):
         data = FlightAnalysis(self.track.gates, self.flight_data)
         data.plot_input(self.flight_data)
         data.plot_3D_path()
-        data.show()
+        data.save()
 
     def convert_trajectory_euler_to_quaternion(self, trajectory):
         
@@ -1334,8 +1334,8 @@ if __name__ == "__main__":
     init_logging()
     #log_path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log"
     e = TrajectoryEvolver(args.px4)
-    e.start()
-    #e.repeat()
+    #e.start()
+    e.repeat()
 
 
 
