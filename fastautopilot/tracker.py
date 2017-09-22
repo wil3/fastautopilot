@@ -1,5 +1,7 @@
 from multiprocessing import Process, Queue
-
+import matplotlib
+# Force matplotlib to not use any Xwindows backend.
+matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -289,7 +291,9 @@ class FlightAnalysis(object):
         ax.legend()
 
     def save(self):
-        plt.savefig('flight.png')
+        for i in plt.get_fignums():
+            plt.figure(i)
+            plt.savefig('figure%d.png' % i)
     def show(self):
 #        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
 #        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
