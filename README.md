@@ -23,6 +23,11 @@ git clone https://github.com/wil3/gzmocap.git
 git clone https://github.com/wil3/pygazebo.git
 ```
 
+4. Clone pymavlink
+There is a bug in how pymavlink is installed with dronekit, it uses the wrong
+version causes a "Exception in message handler for HEARTBEAT" message
+
+Install from source or install separately so version is 2.2.4 > 
 4. Clone this library
 
 
