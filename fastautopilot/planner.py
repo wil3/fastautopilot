@@ -682,8 +682,9 @@ class QuadrotorGuided(QuadrotorPX4):
 class TrajectoryEvolver(object):
     """ Radius in meters that is accepted to hit the waypoint """
     WAYPOINT_R = 1.0
-    CXPB, MUTPB, ADDPB, DELPB, MU, NGEN, POP = 0.7, 0.4, 0.4, 0.4, 100, 1000, 20
+    CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.7, 0.4, 0.4, 0.4, 20, 1000
     
+    GATE_PENALTY = 100000 #ms
     TAKEOFF_TIMEOUT = 10000 #ms
     GATE_HANDICAP = 5000 #ms
 
@@ -1038,69 +1039,63 @@ class TrajectoryEvolver(object):
 
         self.counter += 1
         
-        GATE_PENALTY = 10000
         
         # If they finished the track then we evaluate on their best time
         if len(gate_times) == self.track.gate_count:
             return gate_times[-1],
         elif len(gate_times) == 0:
-            return (self.track.gate_count * GATE_PENALTY),
+            return (self.track.gate_count * self.GATE_PENALTY),
         else:
             # if the aircarft made it to some gates then 
             # take the last reached time then penalize proportional for those not reached
-            return (gate_times[-1] + ((self.track.gate_count - len(gate_times)) * GATE_PENALTY)),
+            return (gate_times[-1] + ((self.track.gate_count - len(gate_times)) * self.GATE_PENALTY)),
             
 
 
          
-
+    def number_finished_race(self, pop):
+        """Given the population how many actually finished the race?"""
+        fits = [ind.fitness.values[0] for ind in pop]
+        finished = 0
+        for f in fits:
+            if f < self.GATE_PENALTY:
+                finished += 1
+        return finished
 
 
     def start(self):
         signal.signal(signal.SIGINT, self.signal_handler)
         np.random.seed(1)
-    
-        """
-        self.baseline_path, self.best_times = self.race("baseline", QuadrotorGuided)
-        log = self.parse_log()
-        self.rate = self.compute_rate_from_log(log)
-        self.baseline_trajectory = self.convert_flight_log_to_euler_trajectory(log)
-        """
 
         self.init_search()
 
-        pop = self.toolbox.population(n=self.POP)
-        """
-	hof = tools.ParetoFront()
-        
-        stats = tools.Statistics(lambda ind: ind.fitness.values)
-        stats.register("min", min)
-        stats.register("max", max)
-        
-        logbook = tools.Logbook()
-        logbook.header = "gen", "evals", "min", "[good,evil,len]", "best"
-        
+        pop = self.toolbox.population(n=self.MU)
 
-        hof.update(pop)
-        record = stats.compile(pop)
-        logbook.record(gen=0, evals=len(pop), **record)
-        """
 
+        logger.info("Evalutating initial population")
         # Evaluate every individuals
         fitnesses = self.toolbox.map(self.toolbox.evaluate, pop)
+        print "Fitnesses: ", fitnesses
         for ind, fit in zip(pop, fitnesses):
             ind.fitness.values = fit
 
 
         gen = 1
         while gen <= self.NGEN: # and (logbook[-1]["max"][0] != 0.0 or logbook[-1]["max"][1] != 0.0):
-            #logger.info("###############################################")
+            logger.info("###############################################")
             logger.info("                  GEN-{}".format(gen))
-            #logger.info("###############################################")
-            # Select the next generation individuals
-            offspring = self.toolbox.select(pop, len(pop))
+            logger.info("###############################################")
+
+
+            # Next we perform cross over and mutation. We select from the population
+            # those that will be combined to form new individuals
+
+            # Select the next generation individuals, only 
+            # select the best to mate
+            offspring = self.toolbox.select(pop, int(len(pop)/2.0))
             # Clone the selected individuals
             offspring = list(map(self.toolbox.clone, offspring))
+            logger.info("Number of parents %s" % len(offspring))
             # Apply crossover and mutation on the offspring
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
                 if np.random.random() < self.CXPB:
@@ -1108,6 +1103,7 @@ class TrajectoryEvolver(object):
                     del child1.fitness.values
                     del child2.fitness.values
 
+            logger.info("Number of offsprint after mating %s" % len(offspring))
             for mutant in offspring:
                 if np.random.random() < self.MUTPB:
                     self.toolbox.mutate(mutant)
@@ -1120,6 +1116,7 @@ class TrajectoryEvolver(object):
                     del mutant.fitness.values
 
             # Evaluate the individuals with an invalid fitness
+            logger.info("Evalulating the offspring...")
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
             fitnesses = map(self.toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
@@ -1127,21 +1124,25 @@ class TrajectoryEvolver(object):
 
             logger.info("  Evaluated %i individuals" % len(invalid_ind))
 
-            b = tools.selBest(pop, k=1)[0]
            
-            # Replace the population with the offspring 
-            pop[:] = offspring#self.toolbox.select(pop + offspring, self.MU)
+            logger.info("Population size %s offspring size %s" % (len(pop), len(offspring)))
+            # combine the existing population with the offspring
+            # and take the best ones 
+            pop[:] = self.toolbox.select(pop + offspring, self.MU)
             gen += 1
 
  # Gather all the fitnesses in one list and print the stats
             fits = [ind.fitness.values[0] for ind in pop]
- #                 
+
+
             # Generate stats
 	    length = len(pop)
 	    mean = sum(fits) / length
 	    sum2 = sum(x*x for x in fits)
 	    std = abs(sum2 / length - mean**2)**0.5
 
+
+            logger.info("  Finished Race %s" % self.number_finished_race(pop))
 	    logger.info("  Min %s" % min(fits))
 	    logger.info("  Max %s" % max(fits))
 	    logger.info("  Avg %s" % mean)
