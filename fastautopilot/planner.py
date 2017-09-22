@@ -711,7 +711,8 @@ class TrajectoryEvolver(object):
         self.gate_times = []
         self.track = straight_line_track(num_gates = 2, altitude = -2)
         #self.track = square_track()
-
+        self.gz = GazeboAPI(self.gazebo_host, self.gazebo_port)
+        self.gz.listen()
         # have something as the default that will cause a time out if not reached
         """
         t= 0
@@ -948,7 +949,6 @@ class TrajectoryEvolver(object):
 
     def mate_one_point(self, input_A, input_B):
         """ Pick a random point of the smaller and swap the tails"""
-        logger.info("mate one")
         pt = np.random.randint(min(len(input_A), len(input_B)))
         tmp = input_B[pt:]
         input_B[pt:] = input_A[pt:]
@@ -988,7 +988,6 @@ class TrajectoryEvolver(object):
         random_cmd_index = np.random.randint(len(inputs))
         random_cmd = inputs[random_cmd_index]
 
-        logger.info("Mutate command {}".format(random_cmd))
         #Now randomly select an input
         random_input_index = np.random.randint(len(random_cmd))
         max = self.attitude_field_constraints[random_input_index]["max"]
@@ -1210,7 +1209,8 @@ class TrajectoryEvolver(object):
         logger.info("Race stats {}".format(self.track))
 
         #Reset the model so we can start again
-        GazeboAPI(self.gazebo_host, self.gazebo_port).reset_model(self._model_reset_callback)
+        #GazeboAPI(self.gazebo_host, self.gazebo_port).reset_model(self._model_reset_callback)
+        self.gz.reset()
 
 
         return self.vehicle.flight_trajectory, self.vehicle.gate_times
@@ -1278,7 +1278,9 @@ class TrajectoryEvolver(object):
     def signal_handler(self, signal, frame):
         logger.info('You pressed Ctrl+C! Aborting')
         #Reset the model so we can start again
-        GazeboAPI(self.gazebo_host, self.gazebo_port).reset_model(self._model_reset_callback)
+        #GazeboAPI(self.gazebo_host, self.gazebo_port).reset_model(self._model_reset_callback)
+        self.gz.reset()
+        self.gz.shutdown()
         self.racing = False
         self.vehicle.running = False #stop all threads
         self.vehicle.armed = False
@@ -1340,6 +1342,7 @@ if __name__ == "__main__":
     #log_path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log"
     e = TrajectoryEvolver(args.px4)
     e.start()
+    e.gz.shutdown()
     #e.repeat()
 
 
