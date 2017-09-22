@@ -23,6 +23,7 @@ from pyulog.core import ULog
 import glob
 import signal
 import argparse
+import copy
 
 from deap import algorithms
 from deap import base
@@ -806,8 +807,8 @@ class TrajectoryEvolver(object):
 
         # It has been found that using a heuristic for initialize the entire
         # population will not lead to an optimial solutoin
-        self.toolbox.register("trajectory", self.initial_trajectory)
-        self.toolbox.register("individual", tools.initIterate, creator.Individual, self.toolbox.trajectory)
+        #self.toolbox.register("trajectory", self.initial_trajectory)
+        self.toolbox.register("individual", tools.initIterate, creator.Individual, self.initial_trajectory)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
 
         # Operator registering
@@ -833,11 +834,14 @@ class TrajectoryEvolver(object):
         # flip a coin, however we need to use a baseline first so the best times are set
         if self.first or np.random.random() < 0.5:
             self.first = False
-            return self.trajectory_from_baseline()
+            t = self.trajectory_from_baseline()
+            return t
         else:
         # randoly generating an input will surely cause unstable flight
         # what to do about this
-            return self.generate_random_trajectory()
+            t = self.generate_random_trajectory()
+            return t
+
 
 
     def trajectory_from_baseline(self):
@@ -944,6 +948,7 @@ class TrajectoryEvolver(object):
 
     def mate_one_point(self, input_A, input_B):
         """ Pick a random point of the smaller and swap the tails"""
+        logger.info("mate one")
         pt = np.random.randint(min(len(input_A), len(input_B)))
         tmp = input_B[pt:]
         input_B[pt:] = input_A[pt:]
@@ -983,6 +988,7 @@ class TrajectoryEvolver(object):
         random_cmd_index = np.random.randint(len(inputs))
         random_cmd = inputs[random_cmd_index]
 
+        logger.info("Mutate command {}".format(random_cmd))
         #Now randomly select an input
         random_input_index = np.random.randint(len(random_cmd))
         max = self.attitude_field_constraints[random_input_index]["max"]
@@ -1026,9 +1032,10 @@ class TrajectoryEvolver(object):
 
 
     def evaluate(self, inputs):
+        _in = copy.deepcopy(inputs)
         name = "E-{}".format(self.counter)
         logger.info("Evaluating {}".format(name))
-        trajectory, gate_times = self.race(name, QuadrotorEvolved, input=inputs, rate=self.rate)
+        trajectory, gate_times = self.race(name, QuadrotorEvolved, input=_in, rate=self.rate)
 
         self.counter += 1
         
@@ -1045,7 +1052,6 @@ class TrajectoryEvolver(object):
             return (gate_times[-1] + ((self.track.gate_count - len(gate_times)) * GATE_PENALTY)),
             
 
-        return gate_times[-1],
 
          
 
@@ -1092,7 +1098,6 @@ class TrajectoryEvolver(object):
             #logger.info("###############################################")
             logger.info("                  GEN-{}".format(gen))
             #logger.info("###############################################")
-
             # Select the next generation individuals
             offspring = self.toolbox.select(pop, len(pop))
             # Clone the selected individuals
@@ -1334,8 +1339,8 @@ if __name__ == "__main__":
     init_logging()
     #log_path = "/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log"
     e = TrajectoryEvolver(args.px4)
-    #e.start()
-    e.repeat()
+    e.start()
+    #e.repeat()
 
 
 
