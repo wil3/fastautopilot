@@ -686,7 +686,7 @@ class TrajectoryEvolver(object):
     
     GATE_PENALTY = 100000 #ms
     TAKEOFF_TIMEOUT = 10000 #ms
-    GATE_HANDICAP = 5000 #ms
+    GATE_HANDICAP = 10000 #ms
 
     def __init__(self, logpath, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
 
@@ -802,7 +802,7 @@ class TrajectoryEvolver(object):
     def init_search(self):
 	# The weights tuple depends on what is returned in the evaluation function
         # We will want to minimize the time
-	creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+	creator.create("FitnessMin", base.Fitness, weights=(-1.0,-1.0,))
         creator.create("Individual", list, fitness=creator.FitnessMin)
 
         self.toolbox = base.Toolbox()
@@ -1022,14 +1022,42 @@ class TrajectoryEvolver(object):
             pt = [t.x, t.y, t.z]
 
     def _d(self, pt1, pt2):
-        """
-        Return distance between two points in 3D
-        """
+        """ Return distance between two points in 3D where each point is an array [x, y, z]"""
         a = np.array(pt1)
         b = np.array(pt2)
         d = np.linalg.norm(a-b)
         return d
 
+    def evaluate_proximity(self, trajectory):
+        """Based on the trajectory how close did they get to the gates?"""
+
+        # Set defaults
+        gate_distances = [0]*self.track.gate_count
+        pt = [0, 0, 0]
+        for i in range(self.track.gate_count):
+            gate = self.track.gates[i]
+            gate_pt = [gate.x, gate.y, gate.z]
+            d = self._d(pt, gate_pt)
+            gate_distances[i] = d
+            pt = gate_pt
+
+        next_gate = 0
+        #gate_points = [[gate.x, gate.y, gate.z] for gate in self.track.gates]
+        for i in trajectory:
+            pt = [i.x, i.y, i.z]
+
+            gate = self.track.gates[next_gate]
+            gate_pt = [gate.x, gate.y, gate.z]
+            d = self._d(gate_pt, pt)
+            #if d < gate_distances[next_gate]:
+            gate_distances[next_gate] = d
+
+            if gate.detected(pt): # Only continue in sequence if we hit the gate
+                next_gate += 1
+
+        
+
+        return sum(gate_distances)
 
     def evaluate(self, inputs):
         _in = copy.deepcopy(inputs)
@@ -1037,20 +1065,22 @@ class TrajectoryEvolver(object):
         logger.info("Evaluating {}".format(name))
         trajectory, gate_times = self.race(name, QuadrotorEvolved, input=_in, rate=self.rate)
 
+        distance_fitness = self.evaluate_proximity(trajectory)
+
         self.counter += 1
         
         
         # If they finished the track then we evaluate on their best time
+        time_fitness = None
         if len(gate_times) == self.track.gate_count:
-            return gate_times[-1],
+            time_fitness = gate_times[-1]
         elif len(gate_times) == 0:
-            return (self.track.gate_count * self.GATE_PENALTY),
+            time_fitness = (self.track.gate_count * self.GATE_PENALTY)
         else:
             # if the aircarft made it to some gates then 
             # take the last reached time then penalize proportional for those not reached
-            return (gate_times[-1] + ((self.track.gate_count - len(gate_times)) * self.GATE_PENALTY)),
-            
-
+            time_fitness = (gate_times[-1] + ((self.track.gate_count - len(gate_times)) * self.GATE_PENALTY))
+        return time_fitness, distance_fitness,
 
          
     def number_finished_race(self, pop):
@@ -1136,6 +1166,7 @@ class TrajectoryEvolver(object):
 
 
             # Generate stats
+            """
 	    length = len(pop)
 	    mean = sum(fits) / length
 	    sum2 = sum(x*x for x in fits)
@@ -1147,11 +1178,14 @@ class TrajectoryEvolver(object):
 	    logger.info("  Max %s" % max(fits))
 	    logger.info("  Avg %s" % mean)
 	    logger.info("  Std %s" % std)
+            """
 
+            """
             if self.check_log_flag():
                 data = FlightAnalysis()
                 data.plot_input(self.flight_data)
                 data.save()
+            """
 
         return pop
 
@@ -1212,6 +1246,7 @@ class TrajectoryEvolver(object):
         self.vehicle.close()
 
         # Collect the flight data from the race
+        """
         try:
             logged_att_sp = self.parse_log()
             #for i in logged_att_sp[:2]:
@@ -1219,6 +1254,7 @@ class TrajectoryEvolver(object):
             self.flight_data.append(FlightData(name, self.vehicle.gate_times, self.vehicle.flight_trajectory, logged_att_sp))
         except Exception as e:
             logger.error(e)
+        """
 
         # Update the best times
         self.track = self.vehicle.track
