@@ -695,7 +695,7 @@ class TrajectoryEvolver(object):
         self.gazebo_host = gazebo_host
         self.gazebo_port = gazebo_port
         #self.gz = GazeboAPI(gazebo_host, gazebo_port)
-
+        self.racers = {}
         self.flight_data = []
         self.flight_data_attitudes = []
         self.flight_data_paths = []
@@ -824,8 +824,8 @@ class TrajectoryEvolver(object):
         """
         self.toolbox.register("mate", self.mate_one_point)
         self.toolbox.register("mutate",self.mutate)
-        self.toolbox.register("addFilter", self.mutate_add)
-        self.toolbox.register("delFilter", self.mutate_del)
+        self.toolbox.register("add", self.mutate_add)
+        self.toolbox.register("delete", self.mutate_del)
         self.toolbox.register("select", tools.selBest )
 
 
@@ -857,9 +857,13 @@ class TrajectoryEvolver(object):
         #t = self.baseline_trajectory[:]
         return baseline_trajectory # t
 
+
+    def constraint_step(self, constraint):
+        return (constraint["max"] - constraint["min"]) / constraint["resolution"]
+
     def continuous_to_discrete(self, value, constraint):
         """Convert a continuous value to a discrete one depending on its constraints"""
-        step = (constraint["max"] - constraint["min"]) / constraint["resolution"]
+        step = self.constraint_step(constraint)
         return math.floor(value/step) * step
 
     def convert_flight_log_to_euler_trajectory(self, attitude):
@@ -991,12 +995,28 @@ class TrajectoryEvolver(object):
 
         #Now randomly select an input
         random_input_index = np.random.randint(len(random_cmd))
-        max = self.attitude_field_constraints[random_input_index]["max"]
-        min = self.attitude_field_constraints[random_input_index]["min"]
+        current_value = inputs[random_cmd_index][random_input_index] 
+
+        # For a mutation mutate by a step
+        constraint = self.attitude_field_constraints[random_input_index]
+        step = self.constraint_step(constraint)
+        if np.random.random() < 0.5:
+            new_input = current_value + step
+        else:
+            new_input = current_value - step
+
+        # Check new  range in limits
+        if new_input < constraint["min"]:
+            new_input = constraint["min"]
+        elif new_input > constraint["max"]:
+            new_input = constraint["max"]
+
+
+
 
         # TODO  Does it make sense to adjust from the original or 
         # choose it randoml yas we are here?
-        new_input = max * np.random.random_sample() + min 
+        #new_input = max * np.random.random_sample() + min 
         inputs[random_cmd_index][random_input_index] = new_input 
 
         return inputs,
@@ -1052,7 +1072,7 @@ class TrajectoryEvolver(object):
             #if d < gate_distances[next_gate]:
             gate_distances[next_gate] = d
 
-            if gate.detected(pt): # Only continue in sequence if we hit the gate
+            if gate.detected(pt[0], pt[1], pt[2]): # Only continue in sequence if we hit the gate
                 next_gate += 1
 
         
@@ -1092,10 +1112,48 @@ class TrajectoryEvolver(object):
                 finished += 1
         return finished
 
+    def update_racer_hall_of_fame(self, pop):
+        ids = []
+        for ind in pop:
+            h = hash(str(ind))
+            ids.append(h)
+            if h in self.racers:
+                self.racers[h] += 1
+            else:
+                self.racers[h] = 0
+
+        #remove old ones
+        keys_to_remove = []
+        for key in self.racers:
+            if not(key in ids):
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del self.racers[key]
+
+
+    def print_racer_hall_of_fame(self):
+        logger.info("Hall of Fame")
+        for key in self.racers:
+            logger.info("{} {}".format(key, self.racers[key]))
 
     def start(self):
         signal.signal(signal.SIGINT, self.signal_handler)
         np.random.seed(1)
+
+        logbook = tools.Logbook()
+        logbook.header = "gen", "time_fitness", "proximity_fitness"
+        logbook.chapters["time_fitness"].header = "min", "avg", "max", "std"
+        logbook.chapters["proximity_fitness"].header = "min", "avg", "max", "std"
+
+        stats_fit_time = tools.Statistics(key=lambda ind: ind.fitness.values[0])
+        stats_fit_proximity = tools.Statistics(key=lambda ind: ind.fitness.values[1])
+        mstats = tools.MultiStatistics(time_fitness=stats_fit_time, proximity_fitness=stats_fit_proximity)
+
+        mstats.register("avg", np.mean)
+        mstats.register("std", np.std)
+        mstats.register("min", np.min)
+        mstats.register("max", np.max)
 
         self.init_search()
 
@@ -1105,9 +1163,11 @@ class TrajectoryEvolver(object):
         logger.info("Evalutating initial population")
         # Evaluate every individuals
         fitnesses = self.toolbox.map(self.toolbox.evaluate, pop)
-        print "Fitnesses: ", fitnesses
         for ind, fit in zip(pop, fitnesses):
             ind.fitness.values = fit
+
+        self.update_racer_hall_of_fame(pop)
+        self.print_racer_hall_of_fame()
 
 
         gen = 1
@@ -1139,10 +1199,10 @@ class TrajectoryEvolver(object):
                     self.toolbox.mutate(mutant)
                     del mutant.fitness.values
                 if np.random.random() < self.ADDPB:
-                    self.toolbox.addFilter(mutant)
+                    self.toolbox.add(mutant)
                     del mutant.fitness.values
                 if np.random.random() < self.DELPB:
-                    self.toolbox.delFilter(mutant) 
+                    self.toolbox.delete(mutant) 
                     del mutant.fitness.values
 
             # Evaluate the individuals with an invalid fitness
@@ -1162,8 +1222,15 @@ class TrajectoryEvolver(object):
             gen += 1
 
  # Gather all the fitnesses in one list and print the stats
-            fits = [ind.fitness.values[0] for ind in pop]
+            fits_time = [ind.fitness.values[0] for ind in pop]
+            fits_proximity = [ind.fitness.values[1] for ind in pop]
 
+            self.update_racer_hall_of_fame(pop)
+            self.print_racer_hall_of_fame()
+
+            record = mstats.compile(pop)
+            logbook.record(gen=gen, **record)
+            print logbook
 
             # Generate stats
             """
