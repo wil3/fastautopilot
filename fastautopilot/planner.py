@@ -1189,19 +1189,25 @@ class TrajectoryEvolver(object):
             # Apply crossover and mutation on the offspring
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
                 if np.random.random() < self.CXPB:
+
+                    logger.info("Crossover")
                     self.toolbox.mate(child1, child2)
                     del child1.fitness.values
                     del child2.fitness.values
 
             logger.info("Number of offsprint after mating %s" % len(offspring))
             for mutant in offspring:
+                h = hash(str(mutant))
                 if np.random.random() < self.MUTPB:
+                    logger.info("{} Mutate Modify".format(h))
                     self.toolbox.mutate(mutant)
                     del mutant.fitness.values
                 if np.random.random() < self.ADDPB:
+                    logger.info("{} Mutate Add".format(h))
                     self.toolbox.add(mutant)
                     del mutant.fitness.values
                 if np.random.random() < self.DELPB:
+                    logger.info("{} Mutate Del".format(h))
                     self.toolbox.delete(mutant) 
                     del mutant.fitness.values
 
@@ -1218,7 +1224,11 @@ class TrajectoryEvolver(object):
             logger.info("Population size %s offspring size %s" % (len(pop), len(offspring)))
             # combine the existing population with the offspring
             # and take the best ones 
-            pop[:] = self.toolbox.select(pop + offspring, self.MU)
+            new_offspring = []
+            for i in offspring:
+                if not(i in pop):
+                    new_offspring.append(i)
+            pop[:] = self.toolbox.select(pop + new_offspring, self.MU)
             gen += 1
 
  # Gather all the fitnesses in one list and print the stats
