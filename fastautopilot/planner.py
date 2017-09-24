@@ -1075,7 +1075,8 @@ class TrajectoryEvolver(object):
             if gate.detected(pt[0], pt[1], pt[2]): # Only continue in sequence if we hit the gate
                 next_gate += 1
 
-        
+            if next_gate > self.track.gate_count - 1:
+                break
 
         return sum(gate_distances)
 
