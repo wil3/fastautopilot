@@ -236,6 +236,8 @@ class QuadrotorPX4(Vehicle):
         """ An array of RaceEvents to track vents occur, i.e., takeoff, land, pass gate """
         self.events = []
 
+        self.out_of_bounds = False
+
 
         """ The track the MAV will fly """
         self.track = None
@@ -348,6 +350,8 @@ class QuadrotorPX4(Vehicle):
 
             # TODO move to gate?
             if self.track:
+                if self.track.is_out_of_bounds(data.x, data.y, data.z):
+                    self.out_of_bounds = True
                 #self.info("x={} y={} z={}".format(data.x, data.y, data.z))
                 if (self.track.gate_count > self.gate_next and
                     self.track.gates[self.gate_next].detected(data.x, data.y, data.z)):
@@ -674,7 +678,7 @@ class QuadrotorGuided(QuadrotorPX4):
 
 
     def fly(self, name, track, input=None, rate = 0):
-        self.set_max_horizontal_velocity(1.0)
+        self.set_max_horizontal_velocity(30.0)
         #  The guided quadcopter flys as input only the track 
         super(QuadrotorGuided, self).fly(name, track)
 
@@ -682,19 +686,30 @@ class QuadrotorGuided(QuadrotorPX4):
 class TrajectoryEvolver(object):
     """ Radius in meters that is accepted to hit the waypoint """
     WAYPOINT_R = 1.0
-    CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.7, 0.4, 0.4, 0.4, 20, 1000
+    SELPB, CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.25, 0.7, 0.4, 0.4, 0.4, 4, 1000
     
-    GATE_PENALTY = 100000 #ms
+    # Kill race if cant take off within this time
     TAKEOFF_TIMEOUT = 10000 #ms
+
+    # Value to be added to fitness for each gate not missed
+    GATE_PENALTY = 100000 #ms
+
+    # Dont kill as long as the race time is less than current time + handicap
     GATE_HANDICAP = 10000 #ms
 
     def __init__(self, logpath, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
 
+        self.start_time = None
         self.logpath = logpath
         self.px4_connect_string = "{}:{}".format(px4_host, px4_port)
         self.gazebo_host = gazebo_host
         self.gazebo_port = gazebo_port
         #self.gz = GazeboAPI(gazebo_host, gazebo_port)
+
+        # Keep track of each racer identified by their hash
+        # including the number of times they have been in the generation
+        # how many way points did they reach and their best times
+        # where their best log is stored
         self.racers = {}
         self.flight_data = []
         self.flight_data_attitudes = []
@@ -704,6 +719,7 @@ class TrajectoryEvolver(object):
         self.vehicle = None
         self.racing = False
         self.first = False
+        self.rate = 0
 
         """ Instance counter for each iteration """
         self.counter = 1
@@ -787,6 +803,9 @@ class TrajectoryEvolver(object):
                 elif self.timeout_takeoff(vehicle):
                     logger.info("Takeoff timeout")
                     abort = True
+                elif vehicle.out_of_bounds:
+                    logger.info("Aircraft out of bounds")
+                    abort = True
 
                 if abort:
                     vehicle.running = False #stop all threads
@@ -810,7 +829,7 @@ class TrajectoryEvolver(object):
         # It has been found that using a heuristic for initialize the entire
         # population will not lead to an optimial solutoin
         #self.toolbox.register("trajectory", self.initial_trajectory)
-        self.toolbox.register("individual", tools.initIterate, creator.Individual, self.initial_trajectory)
+        self.toolbox.register("individual", tools.initIterate, creator.Individual, self.initial_trajectory_single)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
 
         # Operator registering
@@ -844,6 +863,11 @@ class TrajectoryEvolver(object):
             t = self.generate_random_trajectory()
             return t
 
+    def initial_trajectory_single(self):
+        """ Start off with a single command """
+        flight_data = []
+        flight_data.append(self._generate_random_command())
+        return flight_data
 
 
     def trajectory_from_baseline(self):
@@ -1031,6 +1055,8 @@ class TrajectoryEvolver(object):
 
     def mutate_del(self, inputs):
         """ Randomly deleted a trajectory state"""
+        if len(inputs) < 2:
+            return inputs,
         random_cmd_index = np.random.randint(len(inputs))
         inputs.pop(random_cmd_index)
         return inputs,
@@ -1051,7 +1077,8 @@ class TrajectoryEvolver(object):
     def evaluate_proximity(self, trajectory):
         """Based on the trajectory how close did they get to the gates?"""
 
-        # Set defaults
+        # Set maximums which just calculates the distances 
+        # from each gate point by a line, have to get at least better than this
         gate_distances = [0]*self.track.gate_count
         pt = [0, 0, 0]
         for i in range(self.track.gate_count):
@@ -1061,16 +1088,17 @@ class TrajectoryEvolver(object):
             gate_distances[i] = d
             pt = gate_pt
 
+
+        # Instead measure how close the trajectory comes
         next_gate = 0
-        #gate_points = [[gate.x, gate.y, gate.z] for gate in self.track.gates]
         for i in trajectory:
             pt = [i.x, i.y, i.z]
 
             gate = self.track.gates[next_gate]
             gate_pt = [gate.x, gate.y, gate.z]
             d = self._d(gate_pt, pt)
-            #if d < gate_distances[next_gate]:
-            gate_distances[next_gate] = d
+            if d < gate_distances[next_gate]:
+                gate_distances[next_gate] = d
 
             if gate.detected(pt[0], pt[1], pt[2]): # Only continue in sequence if we hit the gate
                 next_gate += 1
@@ -1085,11 +1113,23 @@ class TrajectoryEvolver(object):
         name = "E-{}".format(self.counter)
         logger.info("Evaluating {}".format(name))
         trajectory, gate_times = self.race(name, QuadrotorEvolved, input=_in, rate=self.rate)
+        latest_log = self.get_last_log() 
 
         distance_fitness = self.evaluate_proximity(trajectory)
 
         self.counter += 1
         
+        h = hash(str(inputs))
+        if not(h in self.racers):
+            self.racers[h] = {}
+            self.racers[h]["times"] = []
+            self.racers[h]["gens"] = 0
+
+        # Update their best time
+        if (len(gate_times) > len(self.racers[h]["times"])
+        or (len(gate_times) > 0 and  (gate_times[-1] < self.racers[h]["times"][-1]))):
+            self.racers[h]["log"] = lastest_log.split(self.logpath)[-1]
+            self.racers[h]["times"] = copy.deepcopy(gate_times)
         
         # If they finished the track then we evaluate on their best time
         time_fitness = None
@@ -1114,14 +1154,16 @@ class TrajectoryEvolver(object):
         return finished
 
     def update_racer_hall_of_fame(self, pop):
+        """ Update with the number of generations the racer has been through """
         ids = []
         for ind in pop:
             h = hash(str(ind))
             ids.append(h)
             if h in self.racers:
-                self.racers[h] += 1
+                self.racers[h]["gens"] += 1
             else:
-                self.racers[h] = 0
+                self.racers[h] = {}
+                self.racers[h]["gens"] = 0
 
         #remove old ones
         keys_to_remove = []
@@ -1136,11 +1178,19 @@ class TrajectoryEvolver(object):
     def print_racer_hall_of_fame(self):
         logger.info("Hall of Fame")
         for key in self.racers:
-            logger.info("{} {}".format(key, self.racers[key]))
+            log_str = ""
+            for param in self.racers[key]:
+                log_str += "{} = {} ".format(param, self.racers[key][param])
+            logger.info("{} {}".format(key, log_str))
 
     def start(self):
         signal.signal(signal.SIGINT, self.signal_handler)
         np.random.seed(1)
+
+        # We need to fly guided at least once so we can set up what the
+        # gate times are
+        self.race("baseline", QuadrotorGuided)
+
 
         logbook = tools.Logbook()
         logbook.header = "gen", "time_fitness", "proximity_fitness"
@@ -1183,11 +1233,15 @@ class TrajectoryEvolver(object):
 
             # Select the next generation individuals, only 
             # select the best to mate
-            offspring = self.toolbox.select(pop, int(len(pop)/2.0))
+            offspring = self.toolbox.select(pop, int(len(pop) * self.SELPB))
             # Clone the selected individuals
             offspring = list(map(self.toolbox.clone, offspring))
             logger.info("Number of parents %s" % len(offspring))
             # Apply crossover and mutation on the offspring
+            offspring = offspring * int(1/ self.SELPB)
+            # Use technique from "Evolving Mobile Robots in Simulated and Real Environments"
+            # and dont do cross over
+            """
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
                 if np.random.random() < self.CXPB:
 
@@ -1195,6 +1249,8 @@ class TrajectoryEvolver(object):
                     self.toolbox.mate(child1, child2)
                     del child1.fitness.values
                     del child2.fitness.values
+            """
+
 
             logger.info("Number of offsprint after mating %s" % len(offspring))
             for mutant in offspring:
@@ -1225,11 +1281,14 @@ class TrajectoryEvolver(object):
             logger.info("Population size %s offspring size %s" % (len(pop), len(offspring)))
             # combine the existing population with the offspring
             # and take the best ones 
+            """
             new_offspring = []
             for i in offspring:
                 if not(i in pop):
                     new_offspring.append(i)
             pop[:] = self.toolbox.select(pop + new_offspring, self.MU)
+            """
+            pop[:] = offspring
             gen += 1
 
  # Gather all the fitnesses in one list and print the stats
