@@ -77,6 +77,7 @@ class SimplePointGate(Gate):
 
 class Track:
     """ A track is made up of a sequence of waypoints. Each waypoint is a constraint """
+    OUT_OF_BOUNDS = 10
     def __init__(self, gates=None):
 
         if gates:
@@ -88,10 +89,15 @@ class Track:
 
         self.gate_count = len(gates)
 
+
+
     def add_gate(self, gate):
         self.gates.append(gate)
         self.gate_count(len(gates))
 
+    def is_out_of_bounds(self, x, y, z):
+        LIM = 20
+        return abs(x) > LIM or abs(y) > LIM or abs(z) > LIM 
     def __str__(self):
         return str(self.gates)
 
