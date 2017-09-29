@@ -1128,7 +1128,7 @@ class TrajectoryEvolver(object):
         # Update their best time
         if (len(gate_times) > len(self.racers[h]["times"])
         or (len(gate_times) > 0 and  (gate_times[-1] < self.racers[h]["times"][-1]))):
-            self.racers[h]["log"] = lastest_log.split(self.logpath)[-1]
+            self.racers[h]["log"] = latest_log.split(self.logpath)[-1]
             self.racers[h]["times"] = copy.deepcopy(gate_times)
         
         # If they finished the track then we evaluate on their best time
