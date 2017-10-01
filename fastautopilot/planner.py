@@ -29,6 +29,7 @@ from deap import algorithms
 from deap import base
 from deap import creator
 from deap import tools
+from subprocess import call,Popen
 
 #ROLL = 1
 #PITCH = 2
@@ -697,10 +698,20 @@ class TrajectoryEvolver(object):
     # Dont kill as long as the race time is less than current time + handicap
     GATE_HANDICAP = 10000 #ms
 
-    def __init__(self, logpath, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
+    def __init__(self, px4_home, gazebo_host="127.0.0.1", gazebo_port=11345, px4_host="127.0.0.1", px4_port=14540):
 
         self.start_time = None
-        self.logpath = logpath
+        self.px4_home = px4_home
+
+        log_dir = os.path.join(px4_home, "build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log")
+        if not os.path.isdir(log_dir):
+            raise argparse.ArgumentTypeError("Log directory {} does not exist".format(log_dir))
+
+        self.px4_log = log_dir
+
+        logger.info("Starting sim")
+        self.start_sim()
+
         self.px4_connect_string = "{}:{}".format(px4_host, px4_port)
         self.gazebo_host = gazebo_host
         self.gazebo_port = gazebo_port
@@ -1128,7 +1139,7 @@ class TrajectoryEvolver(object):
         # Update their best time
         if (len(gate_times) > len(self.racers[h]["times"])
         or (len(gate_times) > 0 and  (gate_times[-1] < self.racers[h]["times"][-1]))):
-            self.racers[h]["log"] = latest_log.split(self.logpath)[-1]
+            self.racers[h]["log"] = latest_log.split(self.px4_log)[-1]
             self.racers[h]["times"] = copy.deepcopy(gate_times)
         
         # If they finished the track then we evaluate on their best time
@@ -1183,7 +1194,16 @@ class TrajectoryEvolver(object):
                 log_str += "{} = {} ".format(param, self.racers[key][param])
             logger.info("{} {}".format(key, log_str))
 
+    def start_sim(self):
+        os.environ["HEADLESS"] = "1"
+        #call(["make", "posix_sitl_lpe", "gazebo"], cwd=self.px4_home, shell=True)
+        print self.px4_home
+        cmd = "make posix_sitl_lpe gazebo"
+        p = Popen(cmd, cwd=self.px4_home, shell=True)
+        time.sleep(10)
+
     def start(self):
+
         signal.signal(signal.SIGINT, self.signal_handler)
         np.random.seed(1)
 
@@ -1323,6 +1343,8 @@ class TrajectoryEvolver(object):
                 data.plot_input(self.flight_data)
                 data.save()
             """
+            logger.info("Restarting sim")
+            self.start_sim()
 
         return pop
 
@@ -1406,7 +1428,7 @@ class TrajectoryEvolver(object):
 
 
     def get_last_log(self):
-        path = "{}/*/*.ulg".format(self.logpath) 
+        path = "{}/*/*.ulg".format(self.px4_log) 
 #"/home/wil/workspace/buflightdev/PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log/2017-08-29/*.ulg"
         list_of_files = glob.glob(path)
         return max(list_of_files, key=os.path.getctime)
@@ -1516,11 +1538,8 @@ def check_directory(value):
     if not os.path.isdir(value):
         raise argparse.ArgumentTypeError("PX4 home directory {} does not exist".format(value))
 
-    log_dir = os.path.join(value, "build_posix_sitl_lpe/tmp/rootfs/fs/microsd/log")
-    if not os.path.isdir(log_dir):
-        raise argparse.ArgumentTypeError("Log directory {} does not exist".format(log_dir))
 
-    return log_dir
+    return value
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
