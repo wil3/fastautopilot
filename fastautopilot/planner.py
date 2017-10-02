@@ -14,10 +14,8 @@ from tracker import *
 import threading
 from collections import deque
 
-from sim.gazebo.gazeboapi import GazeboAPI 
 import abc 
 
-from track import * 
 from pyulog.core import ULog
 
 import glob
@@ -30,6 +28,10 @@ from deap import base
 from deap import creator
 from deap import tools
 from subprocess import call,Popen
+
+from sim.gazebo.gazeboapi import GazeboAPI 
+from track import * 
+from gzmocap import GazeboMOCAP
 
 #ROLL = 1
 #PITCH = 2
@@ -709,8 +711,10 @@ class TrajectoryEvolver(object):
 
         self.px4_log = log_dir
 
-        logger.info("Starting sim")
-        self.start_sim()
+        #logger.info("Starting sim")
+        #self.start_sim()
+        self.px4_host = px4_host
+        self.px4_port = px4_port
 
         self.px4_connect_string = "{}:{}".format(px4_host, px4_port)
         self.gazebo_host = gazebo_host
@@ -767,6 +771,7 @@ class TrajectoryEvolver(object):
             {"min": -20, "max": 20, "resolution": 1000.0} # Yaw in degrees
 
         ]
+
 
     def _model_reset_callback(self):
         logger.debug("Model reset")
@@ -1343,8 +1348,8 @@ class TrajectoryEvolver(object):
                 data.plot_input(self.flight_data)
                 data.save()
             """
-            logger.info("Restarting sim")
-            self.start_sim()
+            #logger.info("Restarting sim")
+            #self.start_sim()
 
         return pop
 
@@ -1388,7 +1393,8 @@ class TrajectoryEvolver(object):
         #logger.info("###########################################################")
 
 
-        self.vehicle = connect(self.px4_connect_string, wait_ready=True, vehicle_class=vehicle_class, status_printer=None)
+        self.vehicle = connect(self.px4_connect_string, wait_ready=True, vehicle_class=vehicle_class, status_printer=None, heartbeat_timeout=60)
+        self.gz.vehicle = self.vehicle
 
         # Monitor the race and abort if things go wrong
         t = threading.Thread(target=self.race_monitor, args=(self.vehicle,))
@@ -1402,6 +1408,7 @@ class TrajectoryEvolver(object):
             time.sleep(1)
         logger.debug("Joining...")
         t.join()
+        self.gz.vehicle = None
         self.vehicle.close()
 
         # Collect the flight data from the race
