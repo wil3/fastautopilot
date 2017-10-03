@@ -31,7 +31,6 @@ from subprocess import call,Popen
 
 from sim.gazebo.gazeboapi import GazeboAPI 
 from track import * 
-from gzmocap import GazeboMOCAP
 
 #ROLL = 1
 #PITCH = 2
@@ -299,11 +298,13 @@ class QuadrotorPX4(Vehicle):
         def heartbeat(self, name, beat):
             #self.info("HEARTBEAT")
             pass
-        @self.on_message('ATTITUDE')
-        def attitude_listener(self, name, attitude):
-            #print attitude
-            pass
 
+        #@self.on_message('ATTITUDE')
+        #def attitude_listener(self, name, attitude):
+            #print attitude
+        #    pass
+
+        """
         @self.on_message('ATTITUDE_TARGET')
         def attitude_target_listener(self, name, target):
             #sys.stdout.write('.')
@@ -340,6 +341,7 @@ class QuadrotorPX4(Vehicle):
 
             self.curr_land_state = state.landed_state
 
+        """
         @self.on_message('LOCAL_POSITION_NED')
         def local_position_ned_listener(self, name, data):
             if not self.start_position:
@@ -506,6 +508,7 @@ class QuadrotorPX4(Vehicle):
 
     
 class QuadrotorEvolved(QuadrotorPX4):
+    REPLAY_RATE = 100.0 #hz
 
     def __init__(self, *args):
         super(QuadrotorEvolved, self).__init__(*args)
@@ -609,13 +612,14 @@ class QuadrotorEvolved(QuadrotorPX4):
 
             self.set_attitude_target(curr_attitude)
 
-            T = self.convert_rate_to_time(self.rate)
+            T = self.convert_rate_to_time(self.REPLAY_RATE)
             time_lapsed_s = (self.system_time_us() - current_time)/1000000.0
             if time_lapsed_s < T:
                 time.sleep(T - time_lapsed_s )
 
         self.debug("Set {} commands".format(command_index))
 
+    """
     def controller2(self):
         self.debug("Thread started")
         (t, roll, pitch, yaw, thrust) = split_input_data(self.input)
@@ -646,6 +650,7 @@ class QuadrotorEvolved(QuadrotorPX4):
             self.set_attitude_target(curr_attitude)
 
         self.debug("Set {} commands".format(command_index))
+    """
 
 
 class QuadrotorGuided(QuadrotorPX4):
