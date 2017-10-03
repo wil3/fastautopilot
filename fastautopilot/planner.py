@@ -686,7 +686,7 @@ class QuadrotorGuided(QuadrotorPX4):
 
 
     def fly(self, name, track, input=None, rate = 0):
-        self.set_max_horizontal_velocity(30.0)
+        self.set_max_horizontal_velocity(1.0)
         #  The guided quadcopter flys as input only the track 
         super(QuadrotorGuided, self).fly(name, track)
 
@@ -729,8 +729,13 @@ class TrajectoryEvolver(object):
         # Keep track of each racer identified by their hash
         # including the number of times they have been in the generation
         # how many way points did they reach and their best times
-        # where their best log is stored
+        # where their best log is stored. Note: this only keeps track of the top NGEN
+        # racers
         self.racers = {}
+
+        #Keep track of the trajectories from each generation
+        # Keyed by the hash
+        self.evo_log = {}
         self.flight_data = []
         self.flight_data_attitudes = []
         self.flight_data_paths = []
@@ -1145,6 +1150,7 @@ class TrajectoryEvolver(object):
             self.racers[h] = {}
             self.racers[h]["times"] = []
             self.racers[h]["gens"] = 0
+            self.racers[h]["path"] = trajectory
 
         # Update their best time
         if (len(gate_times) > len(self.racers[h]["times"])
@@ -1174,6 +1180,10 @@ class TrajectoryEvolver(object):
                 finished += 1
         return finished
 
+
+    def get_id(self, ind):
+        return hash(str(ind))
+
     def update_racer_hall_of_fame(self, pop):
         """ Update with the number of generations the racer has been through """
         ids = []
@@ -1201,6 +1211,8 @@ class TrajectoryEvolver(object):
         for key in self.racers:
             log_str = ""
             for param in self.racers[key]:
+                if param == "path":
+                    continue
                 log_str += "{} = {} ".format(param, self.racers[key][param])
             logger.info("{} {}".format(key, log_str))
 
@@ -1250,6 +1262,12 @@ class TrajectoryEvolver(object):
         self.update_racer_hall_of_fame(pop)
         self.print_racer_hall_of_fame()
 
+        best = self.toolbox.select(pop, 1)[0]
+        id = self.get_id(best)
+        key = "{}:{}".format(id, str(0))
+        self.evo_log[key] = self.racers[id]["path"]
+
+        self.save_trajectory_plot("plot/", 0)
 
         gen = 1
         while gen <= self.NGEN: # and (logbook[-1]["max"][0] != 0.0 or logbook[-1]["max"][1] != 0.0):
@@ -1331,6 +1349,11 @@ class TrajectoryEvolver(object):
             record = mstats.compile(pop)
             logbook.record(gen=gen, **record)
             print logbook
+            best = self.toolbox.select(pop, 1)[0]
+
+            id = self.get_id(best)
+            key = "{}:{}".format(id, gen)
+            self.evo_log[key] = self.racers[id]["path"]
 
             # Generate stats
             """
@@ -1353,12 +1376,24 @@ class TrajectoryEvolver(object):
                 data.plot_input(self.flight_data)
                 data.save()
             """
+            self.save_trajectory_plot("plot/", str(gen))
             #logger.info("Restarting sim")
             #self.start_sim()
 
         return pop
 
+    def save_trajectory_plot(self, filepath, name):
+        if not os.path.exists(filepath):
+            os.makedirs(filepath)
+        flight_data = []
+        for key in self.evo_log:
+            gen = key.split(":")[1]
+            t = self.evo_log[key]
+            flight_data.append(FlightData(gen, None, t, None ))
 
+        data = FlightAnalysis(self.track.gates, flight_data)
+        data.plot_3D_path()
+        data.save(filepath, name)
 
     def repeat(self):
         self.race("baseline", QuadrotorGuided)
@@ -1399,7 +1434,11 @@ class TrajectoryEvolver(object):
 
 
         self.vehicle = connect(self.px4_connect_string, wait_ready=True, vehicle_class=vehicle_class, status_printer=None, heartbeat_timeout=60)
-        self.gz.vehicle = self.vehicle
+        #self.gz.vehicle = self.vehicle
+        # Give it some time to get the mocap data to the FC
+        # FIXME this is sloppy anyway to confirm?
+        #time.sleep(5)
+
 
         # Monitor the race and abort if things go wrong
         t = threading.Thread(target=self.race_monitor, args=(self.vehicle,))
@@ -1413,7 +1452,7 @@ class TrajectoryEvolver(object):
             time.sleep(1)
         logger.debug("Joining...")
         t.join()
-        self.gz.vehicle = None
+        #self.gz.vehicle = None
         self.vehicle.close()
 
         # Collect the flight data from the race
