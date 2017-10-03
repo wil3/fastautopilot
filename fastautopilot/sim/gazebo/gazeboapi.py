@@ -40,6 +40,8 @@ class GazeboAPI:
         self.listening = True
         self.should_reset = False
 
+        self.vehicle = None
+
     def get_sim_time(self, callback):
         self.callback = callback
         loop = trollius.get_event_loop()
@@ -86,21 +88,6 @@ class GazeboAPI:
             print "Closing connection"
             conn.socket.close()
 
-    def _reset_callback(self, data):
-        msg = pygazebo.msg.poses_stamped_pb2.PosesStamped()
-        msg.ParseFromString(data)
-        for pose in msg.pose:
-            if pose.name == self.MODEL_NAME:
-                if self._at_origin(pose):
-                    self.waiting_for_message = False
-                    self.is_reset = True
-                    self.should_reset = False
-                    #print "Model reset!"
-                    if self.callback:
-                        self.callback()
-                else:
-                    self.is_reset = False
-                break
 
     def _unsubscribe_callback(self, data):
         print "Unsubscribed!"
@@ -187,35 +174,6 @@ class GazeboAPI:
         manager._master.socket.close()
         manager._server.socket.close()
     
-    def _listen(self):#, future):
-        
-        #start listening for the event
-        #print "connect"
-        manager = yield From(pygazebo.connect((self.host, self.port)))
-        #print "pub init"
-        publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
-        #print "sub init"
-       
-        # There doesnt seem to be a way to 
-        # unsubscribe from a topic which means the first time we subscribe
-        # we will always have these messages sent to us
-        self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
-        world = self._world_reset_message()
-        self.waiting_for_message = True
-        self.waiting_for_unsubscribe = True
-
-        publish_interval = 1 # publish at this interval
-        poll_interval = 0.1 # Sleep for this long to wait for a response message
-        last_time = 0
-        while self.listening: 
-
-            yield From(trollius.sleep(poll_interval))
-            dt = time.time() - last_time
-            if self.should_reset and dt > publish_interval: 
-                #print "pub"
-                yield From(publisher.publish(world))
-                last_time = time.time()
-
     def _reset(self):
         publisher = yield From(self.manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
         world = self._world_reset_message()
@@ -235,19 +193,83 @@ class GazeboAPI:
         publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
         self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._reset_callback)
 
+    def _send_att_pos_mocap(self, q, x, y, z):
+        """
+        http://mavlink.org/messages/common#ATT_POS_MOCAP
+        http://osrf-distributions.s3.amazonaws.com/gazebo/msg-api/7.1.0/poses__stamped_8proto.html
+        """
+        time_usec = int(round(time.time() * 1000000))
+        #print "q={} x={} y={} z={}".format(q, x, y, z)
+        self.vehicle._master.mav.att_pos_mocap_send(time_usec, q, x, y, z)
+
+    def ENUtoNEDBodyFrame(self, x, y, z):
+        return (x, -y, -z)
+
+    def _process_pose(self, pose):
+        pos = pose.position 
+        o = pose.orientation
+        (ned_x, ned_y, ned_z) = o_ned = self.ENUtoNEDBodyFrame(o.x, o.y, o.z)
+        q = [o.w, ned_x, ned_y, ned_z]
+        (ned_pos_x, ned_pos_y, ned_pos_z) = self.ENUtoNEDBodyFrame(pos.x, pos.y, pos.z)
+        self._send_att_pos_mocap(q, ned_pos_x, ned_pos_y, ned_pos_z)
+
+    def _pose_callback(self, data):
+        msg = pygazebo.msg.poses_stamped_pb2.PosesStamped()
+        msg.ParseFromString(data)
+        for pose in msg.pose:
+            if pose.name == self.MODEL_NAME:
+                if self.vehicle:
+                    #print "V= ", self.vehicle.system_status
+                    self._process_pose(pose)
+                if self._at_origin(pose):
+                    self.waiting_for_message = False
+                    self.is_reset = True
+                    self.should_reset = False
+                    #print "Model reset!"
+                    if self.callback:
+                        self.callback()
+                else:
+                    self.is_reset = False
+                break
+
+    def _listen(self):#, future):
+        
+        #start listening for the event
+        #print "connect"
+        manager = yield From(pygazebo.connect((self.host, self.port)))
+        #print "pub init"
+        publisher = yield From(manager.advertise('/gazebo/default/world_control', 'gazebo.msgs.WorldControl'))
+        #print "sub init"
+       
+        # There doesnt seem to be a way to 
+        # unsubscribe from a topic which means the first time we subscribe
+        # we will always have these messages sent to us
+        self.pose_info_subscriber = manager.subscribe('/gazebo/default/pose/info', 'gazebo.msgs.PosesStamped', self._pose_callback)
+        world = self._world_reset_message()
+        self.waiting_for_message = True
+        self.waiting_for_unsubscribe = True
+
+        publish_interval = 1 # publish at this interval
+        poll_interval = 0.1 # Sleep for this long to wait for a response message
+        last_time = 0
+        while self.listening: 
+
+            yield From(trollius.sleep(poll_interval))
+            dt = time.time() - last_time
+            if self.should_reset and dt > publish_interval: 
+                #print "pub"
+                yield From(publisher.publish(world))
+                last_time = time.time()
+
+
 
     def _listen_start_loop(self, loop):
         asyncio.set_event_loop(loop)
-        #self.loop = asyncio.get_event_loop()
         loop.run_until_complete(self._listen())
 
     def listen(self, callback=None):
         self.callback = callback
-        #self.loop = asyncio.get_event_loop()
-        #self.loop.run_forever(self._listen())
-        #self.listen_thread = multiprocessing.Process(target=self._listen_start_loop)
         new_loop = asyncio.new_event_loop()
-
         self.listen_thread = threading.Thread(target=self._listen_start_loop, args=(new_loop,))
         self.listen_thread.start()
 
