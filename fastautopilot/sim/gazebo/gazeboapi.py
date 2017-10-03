@@ -23,6 +23,7 @@ import time
 import threading
 import multiprocessing
 
+from dronekit import connect, Command, LocationGlobal, Vehicle, VehicleMode
 class GazeboAPI:
     MODEL_NAME = "iris"
     ORIGIN_TOL = 0.1
@@ -40,7 +41,9 @@ class GazeboAPI:
         self.listening = True
         self.should_reset = False
 
-        self.vehicle = None
+        px4_connection_string = "{}:{}".format(host,14550 )
+        self.vehicle = connect(px4_connection_string, wait_ready=True, status_printer=None)
+        #self.vehicle = None
 
     def get_sim_time(self, callback):
         self.callback = callback
