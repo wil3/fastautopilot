@@ -4,9 +4,11 @@ import matplotlib
 matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
+plt.rcParams['figure.figsize'] = (11, 8)
 import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 import mpl_toolkits.mplot3d.axes3d as p3
+import os
 
 
 
@@ -276,24 +278,23 @@ class FlightAnalysis(object):
 #        ax.set_zlim3d([min(z), max(z)])
         plt.ticklabel_format(style='plain', axis='both')
 
-
-
         i = 0
         for (x, y, z) in paths:
             ax.plot(x, y, zs=z, label=names[i])
             i += 1
 
-
-
         for gate in self.gates:
             #ax.plot(wp_x, wp_y, 'ro', zs=wp_z, label="Waypoints")
             gate.plot3d(ax)
-        ax.legend()
+        #ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05), )
 
-    def save(self):
+    def save(self, filepath, suffix):
         for i in plt.get_fignums():
             plt.figure(i)
-            plt.savefig('figure%d.png' % i)
+            name = 'figure{}-{}.png'.format(i, suffix)
+            path = os.path.join(filepath, name)
+            plt.savefig(path)
+        plt.close('all')
     def show(self):
 #        self._plot_trajectory(self.x, self.y, self.z)#, self.wp_x, self.wp_y, self.wp_z)
 #        self._plot_trajectory_2D(self.x, self.y)#, self.wp_x, self.wp_y)
