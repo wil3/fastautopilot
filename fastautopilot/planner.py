@@ -694,7 +694,9 @@ class QuadrotorGuided(QuadrotorPX4):
 class TrajectoryEvolver(object):
     """ Radius in meters that is accepted to hit the waypoint """
     WAYPOINT_R = 1.0
-    SELPB, CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.25, 0.7, 0.4, 0.4, 0.4, 4, 1000
+    """ We are increaing P(add) because we can have lots of similiar inputs and we can get to our trajectory
+    the same is not for if we dont have enough inputs"""
+    SELPB, CXPB, MUTPB, ADDPB, DELPB, MU, NGEN = 0.25, 0.7, 0.5, 0.7, 0.4, 4, 1000
     
     # Kill race if cant take off within this time
     TAKEOFF_TIMEOUT = 10000 #ms
@@ -1151,6 +1153,7 @@ class TrajectoryEvolver(object):
             self.racers[h]["times"] = []
             self.racers[h]["gens"] = 0
             self.racers[h]["path"] = trajectory
+            self.racers[h]["len"] = len(inputs)
 
         # Update their best time
         if (len(gate_times) > len(self.racers[h]["times"])
@@ -1267,7 +1270,7 @@ class TrajectoryEvolver(object):
         key = "{}:{}".format(id, str(0))
         self.evo_log[key] = self.racers[id]["path"]
 
-        self.save_trajectory_plot("plot/", 0)
+        #self.save_trajectory_plot("plot/", 0)
 
         gen = 1
         while gen <= self.NGEN: # and (logbook[-1]["max"][0] != 0.0 or logbook[-1]["max"][1] != 0.0):
@@ -1376,13 +1379,25 @@ class TrajectoryEvolver(object):
                 data.plot_input(self.flight_data)
                 data.save()
             """
-            self.save_trajectory_plot("plot/", str(gen))
+            #self.save_trajectory_plot("plot/", str(gen))
+            self.save_trajectory_plot_single("plot/", str(gen), str(id), self.racers[id]["path"])
             #logger.info("Restarting sim")
             #self.start_sim()
 
         return pop
 
+    def save_trajectory_plot_single(self, filepath, filename, dataname, trajectory):
+        if not os.path.exists(filepath):
+            os.makedirs(filepath)
+        flight_data = []
+        flight_data.append(FlightData(name, None, trajectory, None))
+
+        data = FlightAnalysis(self.track.gates, flight_data)
+        data.plot_3D_path()
+        data.save(filepath, name)
+
     def save_trajectory_plot(self, filepath, name):
+        """ Print the best from each generation """
         if not os.path.exists(filepath):
             os.makedirs(filepath)
         flight_data = []
