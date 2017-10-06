@@ -1390,11 +1390,11 @@ class TrajectoryEvolver(object):
         if not os.path.exists(filepath):
             os.makedirs(filepath)
         flight_data = []
-        flight_data.append(FlightData(name, None, trajectory, None))
+        flight_data.append(FlightData(dataname, None, trajectory, None))
 
         data = FlightAnalysis(self.track.gates, flight_data)
         data.plot_3D_path()
-        data.save(filepath, name)
+        data.save(filepath, filename)
 
     def save_trajectory_plot(self, filepath, name):
         """ Print the best from each generation """
@@ -1610,6 +1610,7 @@ def check_directory(value):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("px4", help="Home directory of PX4 firmware", type=check_directory)
+    parser.add_argument("-p", help="Initial population")
     args = parser.parse_args()
 
     init_logging()
