@@ -22,6 +22,11 @@ git clone https://github.com/wil3/gzmocap.git
 ```
 git clone https://github.com/wil3/pygazebo.git
 ```
+ Make sure to switch to the correct branch 
+```
+git checkout f_msgs
+```
+Install sudo pip install .
 
 4. Clone pymavlink
 There is a bug in how pymavlink is installed with dronekit, it uses the wrong
@@ -30,6 +35,13 @@ version causes a "Exception in message handler for HEARTBEAT" message
 Install from source or install separately so version is 2.2.4 > 
 4. Clone this library
 
+4. Need to properly configure PX4 to use mocap data,
+
+* ATT_EXT_HDG_M 2
+* CBRK_GPSFAIL = 240024
+
+4. enable logging by adding the file to, 
+PX4/build_posix_sitl_lpe/tmp/rootfs/fs/microsd/etc/logging/logger_topics.txt
 
 # Run PX4 in SITL
 ```
